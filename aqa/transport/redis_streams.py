@@ -128,8 +128,8 @@ class RedisStreamsTransport(Transport):
                 print(f"[transport] XREADGROUP 错误: {e}")
                 await asyncio.sleep(1)
 
-    async def ack(self, topic: str | Topic, message_id: str | None = None):
+    async def ack(self, topic: str | Topic, message_id: str | None = None, group: str = "aqa-default"):
         topic_str = str(topic.value) if isinstance(topic, Topic) else topic
         if message_id:
             r = await self._get_redis()
-            await r.xack(topic_str, "aqa-default", message_id)
+            await r.xack(topic_str, group, message_id)

@@ -1,6 +1,6 @@
 # AQA — Agent Quality Assurance
 
-基于消息队列的 Agent 通信协议与质量保障系统。
+基于消息队列的 Agent 质量保障系统。
 
 **队列即协议** — Agent 之间没有直接引用、没有函数调用、没有 HTTP 端点。
 通信的唯一原语是 **往某个 topic 发一条消息**，别的 Agent 从 topic 上消费。
@@ -54,47 +54,24 @@
 }
 ```
 
-### 字段详解
-
-| 字段 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `type` | string | ✅ | 消息语义类型, 见下文"消息类型" |
-| `message_id` | string | ✅ | 消息唯一标识, 建议 `uuid4` 或 `hex(16)` |
-| `source` | string | ✅ | 发送者标识。格式建议: `{语言}-{agent名}-{实例ID}` |
-| `target` | string | ❌ | 目标 Agent 标识。**空字符串 `""` 表示广播** (该 topic 下所有消费者都能处理) |
-| `topic` | string | ✅ | 路由主题。必须是已定义的 topic 名 |
-| `trace_id` | string | ✅ | **全链路追踪 ID**。同一任务链上所有消息共享同一个 trace_id |
-| `correlation_id` | string | ❌ | 关联回覆 ID。回复消息时填原始消息的 `message_id` |
-| `version` | string | ✅ | 协议版本, 当前固定 `"1.0"` |
-| `payload` | object | ✅ | 业务负载。**任何合法的 JSON object** |
-| `timestamp` | string | ❌ | ISO-8601 格式的时间戳。发送时自动填充 |
-
-### 消息生命周期
-
-```
-  创建 → 序列化 → publish(topic) → 队列存储 → subscribe(topic) → 反序列化 → 处理
-                                                                          ↓
-                                                                       ack() 或 重试
-```
-
-每条消息在队列中的存储格式是 Redis Stream 的一个 entry, key 为 `topic` 名, value 为 JSON 序列化后的字符串。
+协议规范见 **[PROTOCOL.md](PROTOCOL.md)**（JSON Schema、状态机、路由规则），以该文件为准。
 
 ---
 
 ## 三、消息类型 (Message Types)
 
-系统定义了 8 种消息类型, 覆盖完整的质量保障流程:
-
 | 类型 | 语义 | 方向 | 典型 payload |
 |---|---|---|---|
 | `HEARTBEAT` | 心跳 | Agent → 广播 | `{"cpu": 0.3, "mem": 512, "status": "healthy"}` |
-| `TASK_DISPATCH` | 下发检测任务 | 调度器 → Probe | `{"task_id": "t-001", "target": "svc-a"}` |
+| `TASK_DISPATCH` | 下发检测任务 | 调度器 → Probe | `{"task_id": "t-001", "target": "svc-a", "required_fields": [...]}` |
 | `TASK_RESULT` | 检测结果 | Probe → Judge | `{"task_id": "t-001", "passed": true, "score": 0.95}` |
-| `JUDGE_REQUEST` | 请求评判 | Probe → Judge | `{"task_id": "t-001", "evidences": [...]}` |
-| `JUDGE_VERDICT` | 评判裁决 | Judge → Reporter | `{"task_id": "t-001", "verdict": "PASS", "score": 92}` |
-| `REPORT_REQUEST` | 请求报告 | Judge → Reporter | `{"task_id": "t-001", "format": "html"}` |
-| `REPORT` | 报告结果 | Reporter → 下游 | `{"report_url": "s3://...", "summary": "5/10 通过"}` |
+| `JUDGE_REQUEST` | 请求评判 | Probe → Judge | `{"task_id": "t-001", "task": {...}, "result": {...}}` |
+| `JUDGE_VERDICT` | 评判裁决 | Judge → Reporter | `{"task_id": "t-001", "score": 92, "passed": true, "details": [...]}` |
+| `REPORT_REQUEST` | 请求报告 | Judge → Reporter | `{"task_id": "t-001", "task": {...}, "result": {...}, "verdict": {...}}` |
+| `REPORT_DELIVER` | 报告投递 | Reporter → CLI/broadcast | `{"task_id": "t-001", "title": "...", "score": 0.92, "summary": "..."}` |
 | `ERROR` | 系统错误 | 任意 Agent | `{"code": "TIMEOUT", "message": "probe-1 超时", "trace_id": "..."}` |
+| `REGISTER` | Agent 注册 | Agent → 系统事件 | `{"agent_type": "probe"}` |
+| `SHUTDOWN` | Agent 下线 | Agent → 系统事件 | `{}` |
 
 ### 类型扩展规则
 
@@ -118,44 +95,20 @@ Topic 是消息路由的唯一依据。Agent 不关心"发给谁", 只关心"投
 | `aqa:agent:judge` | 评判裁决 | Judge Agent |
 | `aqa:agent:reporter` | 报告生成 | Reporter Agent |
 | `aqa:inbox:{agent_id}` | Agent 私有收件箱 (定向消息) | 指定 Agent |
+| `aqa:system:events` | 系统事件 (注册/下线) | 监控组件 |
 
 ### Topic 命名规范
 
 ```
 aqa:{scope}:{name}
   │      │       └─ 具体名称, 小写字母 + 连字符
-  │      └───────── 作用域 (agent / inbox / broadcast / plugin)
+  │      └───────── 作用域 (agent / inbox / broadcast / system)
   └──────────────── 系统保留前缀
 ```
-
-- 系统 topic 以 `aqa:` 开头
-- 自定义插件 topic 建议用 `plugin:{plugin_name}:{sub_topic}`
-- 外部 Agent 可以创建任意 topic, 但需避免 `aqa:` 前缀冲突
-
-### 路由规则
-
-```
-  publish("aqa:agent:probe", msg)
-              │
-              ▼
-    ┌─────────────────────┐
-    │  Redis Stream       │
-    │  aqa:agent:probe    │  ← 消息存储在这里
-    └─────────────────────┘
-              │
-     ┌────────┴────────┐
-     ▼                  ▼
-  消费组 judge-group   消费组 external-go-group
-  (内部 Judge Agent)   (外部 Go Agent)
-```
-
-一个 topic 可以有多个消费组, 每个消费组独立消费。内部 Judge 和外部 Go Agent 可以同时处理同一 topic 的消息。
 
 ---
 
 ## 五、全链路追踪 (Trace & Correlation)
-
-这是协议设计中**最重要的部分**。没有它, 一条请求经过 Probe → Judge → Reporter 三个 Agent 后就无法串联了。
 
 ### trace_id — 任务链标识
 
@@ -188,101 +141,35 @@ Agent B 处理完回复 message_id="msg_002", correlation_id="msg_001"
 
 **规则**: 当消息是对另一条消息的回复时, `correlation_id` 填原始消息的 `message_id`。非回复消息的 `correlation_id` 为空字符串。
 
-### 追踪示例
-
-```json
-// 完整追踪链 (三个消息共享 trace_id)
-{
-  "message_id":     "msg_a1",
-  "type":           "TASK_DISPATCH",
-  "trace_id":       "trace_x001",       // ← 入口生成
-  "correlation_id": "",
-  "payload":        { "task_id": "1" }
-}
-→ topic: aqa:agent:probe
-
-{
-  "message_id":     "msg_b2",
-  "type":           "TASK_RESULT",
-  "trace_id":       "trace_x001",       // ← 透传
-  "correlation_id": "msg_a1",           // ← 关联原始消息
-  "payload":        { "task_id": "1", "passed": true }
-}
-→ topic: aqa:agent:judge
-
-{
-  "message_id":     "msg_c3",
-  "type":           "JUDGE_VERDICT",
-  "trace_id":       "trace_x001",       // ← 透传
-  "correlation_id": "msg_b2",
-  "payload":        { "task_id": "1", "verdict": "PASS" }
-}
-→ topic: aqa:agent:reporter
-```
-
-**存储建议**: 配合 Redis Stream 的 ACK 机制 + 外部日志系统, 可以用 `trace_id` 做索引, 查询任意一条任务的全链路数据。
-
 ---
 
 ## 六、数据流
 
-### 标准检测流程
-
-```sequence
-CLI / 调度器
-     │
-     │ publish(TASK_DISPATCH) → aqa:agent:probe
-     ▼
-┌──────────────────────────────────────────────────┐
-│                  Probe Agent                      │
-│                                                   │
-│  1. 订阅 aqa:agent:probe                          │
-│  2. 收到 TASK_DISPATCH                            │
-│  3. 执行插件链 (validator → scorer → custom)       │
-│  4. 发布 TASK_RESULT → aqa:agent:judge            │
-└───────────────────────┬──────────────────────────┘
-                        │
-                        ▼
-┌──────────────────────────────────────────────────┐
-│                  Judge Agent                      │
-│                                                   │
-│  1. 订阅 aqa:agent:judge                          │
-│  2. 收到 TASK_RESULT / JUDGE_REQUEST              │
-│  3. 综合评分, 给出裁决 (PASS / FAIL / WARN)       │
-│  4. 发布 JUDGE_VERDICT → aqa:agent:reporter       │
-└───────────────────────┬──────────────────────────┘
-                        │
-                        ▼
-┌──────────────────────────────────────────────────┐
-│                Reporter Agent                     │
-│                                                   │
-│  1. 订阅 aqa:agent:reporter                       │
-│  2. 收到 JUDGE_VERDICT / REPORT_REQUEST           │
-│  3. 生成报告 (HTML / JSON / Markdown)             │
-│  4. 发布 REPORT → 配置的下游 topic                │
-└──────────────────────────────────────────────────┘
 ```
-
-### 多级流水线 (外部 Agent 插入)
-
+Scheduler/CLI                Probe Agent              Judge Agent            Reporter Agent
+     │                           │                        │                      │
+     │  TASK_DISPATCH             │                        │                      │
+     │──────────────────────────► │                        │                      │
+     │                           │                        │                      │
+     │                     ┌─────┴─────┐                  │                      │
+     │                     │ 执行插件   │                  │                      │
+     │                     └─────┬─────┘                  │                      │
+     │                           │                        │                      │
+     │                     TASK_RESULT                    │                      │
+     │                     JUDGE_REQUEST                  │                      │
+     │                           │───────────────────────►│                      │
+     │                           │                        │                      │
+     │                           │                  ┌─────┴─────┐                │
+     │                           │                  │ 执行评分   │                │
+     │                           │                  └─────┬─────┘                │
+     │                           │                        │                      │
+     │                           │                  JUDGE_VERDICT               │
+     │                           │                  REPORT_REQUEST              │
+     │                           │                        │────────────────────►│
+     │                           │                        │                      │
+     │                           │                  REPORT_DELIVER              │
+     │◄────────────────────────────────────────────────────────────────────────│
 ```
-  TASK_DISPATCH
-       │
-       ▼
-  aqa:agent:probe ──────┬────────────────┐
-       │                 │                │
-  ┌────┴────┐     ┌─────┴─────┐   ┌──────┴──────┐
-  │ Python  │     │  Go       │   │  JS         │
-  │ Probe   │     │  Inspector│   │  Validator  │
-  └────┬────┘     └─────┬─────┘   └──────┬──────┘
-       │                │                │
-       └────────────────┼────────────────┘
-                        │ (多个消费者并行处理)
-                        ▼
-                 aqa:agent:judge
-```
-
-多个 Agent 可以同时消费同一个 topic。例如一个 Python Probe 做基础检测, 一个 Go Inspector 做性能检测, 一个 JS Validator 做前端检查, 三者互不干扰, 各自发布结果到 `aqa:agent:judge`。
 
 ---
 
@@ -291,57 +178,9 @@ CLI / 调度器
 外部 Agent (Go / JS / Java / Rust / 任意语言) 接入的核心原则:
 
 > **不需要 AQA SDK, 不需要 AQA 内核, 不需要 Python 环境。**
-> 只需要能连接队列(REDIS_URL), 会拼 JSON。
+> 只需要能连接队列, 会拼 JSON。
 
-### 接入清单
-
-| 需要 | 不需要 |
-|---|---|
-| Redis 客户端 (任何语言) | AQA Python 包 |
-| 理解本协议的消息信封 | 任何 SDK / stub 代码 |
-| 透传 `trace_id` | 了解 AQA 内部架构 |
-
-### 最小接入示例 (伪代码)
-
-```python
-# ❌ 错误方式: 调用 Agent SDK 的 API
-judge.evaluate(result.payload)
-
-# ✅ 正确方式: 往 topic 发一条消息
-redis.publish("aqa:agent:judge", {
-    "type": "TASK_RESULT",
-    "source": "go-inspector-v2",
-    "topic": "aqa:agent:judge",
-    "trace_id": received_msg.trace_id,   # ← 必须透传
-    "payload": {"task_id": "t-001", "passed": true, "score": 0.97}
-})
-```
-
-### 协议桥接 (Bridge)
-
-对于无法直接连接 Redis 的遗留系统, 提供 Protocol Bridge:
-
-```
-  外部 HTTP 服务             外部 gRPC 服务
-       │                          │
-  HTTP POST /inspect         rpc Inspect()
-       │                          │
-       ▼                          ▼
-  ┌──────────────────────────────────────────┐
-  │           Protocol Bridge                 │
-  │                                           │
-  │  HTTPBridge:   HTTP POST → AQA Queue     │
-  │  gRPCBridge:   gRPC call → AQA Queue     │
-  │  FileBridge:   文件监控 → AQA Queue       │
-  └───────────────┬──────────────────────────┘
-                  │
-                  ▼
-           AQA Queue Bus
-```
-
-Bridge 是薄转换层, 只有**协议转换**逻辑, 不包含任何业务逻辑。
-
-SDK 实现见 `sdk/` 目录, 包含:
+SDK 实现见 `sdk/` 目录:
 - `aqa_sdk/message.py` — Python 端消息构造/解析
 - `aqa_sdk/consumer.py` — 自动 ACK 的消费循环
 - `aqa_sdk/bridge/` — HTTPBridge 实现
@@ -350,9 +189,105 @@ SDK 实现见 `sdk/` 目录, 包含:
 
 ---
 
-## 八、版本与兼容性
+## 八、快速开始
 
-### 版本策略
+```bash
+# 1. 安装
+cd AQA
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt
+
+# 2. 运行测试 (37 项, 无需外部依赖)
+PYTHONPATH=. ./venv/bin/python -m pytest tests/ sdk/tests/ -v
+
+# 3. 运行 InMemory Demo (无需 Redis)
+PYTHONPATH=. ./venv/bin/python examples/demo.py
+
+# 4. 使用 Engine 启动全部 Agent (配置驱动)
+PYTHONPATH=. ./venv/bin/python -m aqa.run
+
+# 5. 使用 Docker Compose (Redis + AQA)
+docker compose up -d
+docker compose logs -f
+```
+
+---
+
+## 九、项目结构
+
+```
+AQA/
+├── PROTOCOL.md              # ★ 通信协议规范 (JSON Schema / 状态机 / 路由规则)
+├── CHANGELOG.md             # 历次修改记录
+├── README.md                # 本文件
+├── docs/                    # 设计文档目录
+│   ├── ARCHITECTURE.md      # 架构总览
+│   ├── AGENT_SYSTEM.md      # Agent 子系统详解
+│   ├── TRANSPORT.md         # Transport 层详解
+│   ├── PLUGIN_SYSTEM.md     # 插件系统详解
+│   ├── TESTING.md           # 测试策略
+│   └── CONFIG_REFERENCE.md  # 配置参考
+│
+├── aqa/                     # AQA 内核
+│   ├── core/
+│   │   ├── message.py       # 消息协议实现 (遵循 PROTOCOL.md)
+│   │   ├── engine.py        # 配置驱动运行时引擎
+│   │   ├── dlq.py           # 死信队列
+│   │   ├── config.py        # 配置加载
+│   │   └── security.py      # Payload AES 加密
+│   ├── transport/
+│   │   ├── base.py          # Transport ABC
+│   │   ├── inmemory.py      # InMemory 实现 (测试/演示)
+│   │   ├── redis_streams.py # Redis Streams 实现 (生产)
+│   │   └── kafka_transport.py   # Kafka 实现 (高吞吐)
+│   ├── plugin/
+│   │   ├── base.py          # Plugin ABC
+│   │   └── registry.py      # 插件注册中心
+│   ├── agent/
+│   │   ├── base.py          # Agent 基类 (心跳/重试/DLQ/幂等去重/优雅关闭)
+│   │   ├── supervisor.py    # Agent 生命周期总管
+│   │   ├── probe.py         # 检测 Agent
+│   │   ├── judge.py         # 评判 Agent
+│   │   └── reporter.py      # 报告 Agent
+│   └── plugins/
+│       ├── validator.py     # 字段校验插件
+│       ├── scorer.py        # 加权评分插件
+│       └── trace_collector.py # 链路追踪插件
+│
+├── sdk/                     # 外部 Agent SDK
+│   ├── aqa_sdk/             #   Python SDK (独立包)
+│   ├── README.md            #   协议文档 + 多语言示例
+│   └── examples/
+│       ├── go_agent.go      #   Go 外部 Agent 示例
+│       └── js_agent.mjs     #   JS 外部 Agent 示例
+│
+├── tests/                   # 核心测试
+│   └── test_aqa.py          # 30 项测试
+├── examples/
+│   └── demo.py              # InMemory Demo
+├── Dockerfile
+├── docker-compose.yml
+└── config.yaml              # 主配置 (完整版)
+```
+
+---
+
+## 十、文档索引
+
+| 文档 | 内容 | 受众 |
+|---|---|---|
+| **[PROTOCOL.md](PROTOCOL.md)** | 消息协议 JSON Schema、状态机、路由规则（唯一权威线格式规范） | 所有 Agent 开发者 |
+| **[CHANGELOG.md](CHANGELOG.md)** | 历次代码修改记录，按时间倒序 | 维护者 |
+| **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | 系统架构总览：模块依赖、数据流、配置体系 | 新开发者入门 |
+| **[docs/AGENT_SYSTEM.md](docs/AGENT_SYSTEM.md)** | Agent 基类、Probe/Judge/Reporter、Supervisor 详解 | Agent 开发者 |
+| **[docs/TRANSPORT.md](docs/TRANSPORT.md)** | Transport 抽象、InMemory/Redis/Kafka 实现细节 | Transport 实现者 |
+| **[docs/PLUGIN_SYSTEM.md](docs/PLUGIN_SYSTEM.md)** | Plugin 基类、Registry、内置插件、自定义指南 | 插件开发者 |
+| **[docs/TESTING.md](docs/TESTING.md)** | 测试策略、运行方式、添加测试指南 | 测试者 |
+| **[docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md)** | config.yaml 配置参考 | 运维/部署 |
+
+---
+
+## 十一、版本与兼容性
 
 ```
 消息版本: version: "1.0"                       ← 协议版本
@@ -372,166 +307,12 @@ Agent 处理消息时:
 
 ---
 
-## 九、Transport 实现参考
+## 十二、协议维护
 
-| 后端 | 状态 | 依赖 |
-|---|---|---|
-| `InMemoryTransport` | ✅ 完整实现 (用于测试和 Demo) | 无 |
-| `RedisStreamsTransport` | ✅ 完整实现 | `redis>=5.0` |
-| `KafkaTransport` | ✅ 完整实现 (消费组/offset/自动提交) | `aiokafka>=0.10.0` |
+协议以 **[PROTOCOL.md](PROTOCOL.md)** 为准，`README.md` 仅作概述。
 
-`Transport` 抽象接口只有 4 个方法:
-
-```python
-class Transport(ABC):
-    async def connect(self) -> None
-    async def publish(self, topic: str, message: str) -> None
-    async def subscribe(self, topic: str) -> AsyncGenerator[str, None]
-    async def ack(self, topic: str, message_id: str) -> None
-```
-
-实现一个新的后端 (如 RabbitMQ / Pulsar / NATS) 只需实现这 4 个方法。
-
----
-
-## 十、插件系统
-
-插件是 Agent 处理 `payload` 时的扩展点, 不参与消息路由。
-
-```
-收到消息 → 反序列化 → 路由到 Agent → 执行插件链 → 构建回复 → 发布
-                                           │
-                                    ┌──────┴──────┐
-                                    │ Plugin.      │
-                                    │ execute(ctx) │
-                                    └─────────────┘
-```
-
-插件通过 `Plugin` 基类实现:
-
-```python
-class Plugin(ABC):
-    @property
-    def name(self) -> str: ...
-
-    @property
-    def config_schema(self) -> dict: ...
-
-    async def execute(self, context: dict) -> dict: ...
-```
-
-插件的注册和卸载在 `config.yaml` 中声明, 运行时通过 `PluginRegistry` 管理。
-
----
-
-## 十一、快速开始
-
-```bash
-# 1. 安装
-cd AQA
-python3 -m venv venv
-./venv/bin/pip install -r requirements.txt
-
-# 2. 运行测试 (36 项, 无外部依赖)
-PYTHONPATH=. ./venv/bin/python -m pytest tests/ -v
-
-# 3. 运行 InMemory Demo (无需 Redis)
-PYTHONPATH=. ./venv/bin/python examples/demo.py
-
-# 4. 使用 Engine 启动全部 Agent (配置驱动)
-PYTHONPATH=. ./venv/bin/python -c "
-import asyncio
-from aqa.core.engine import AQAEngine
-asyncio.run(AQAEngine('config.yaml').run())
-"
-
-# 5. 使用 Docker Compose (Redis + AQA)
-docker compose up -d
-# 查看日志
-docker compose logs -f
-```
-
----
-
-## 项目结构
-
-```
-AQA/
-├── PROTOCOL.md              # ★ 通信协议规范 (JSON Schema / 状态机 / 路由规则)
-├── README.md                # 项目文档
-├── aqa/                     # AQA 内核
-│   ├── core/
-│   │   ├── message.py       # 消息协议实现 (遵循 PROTOCOL.md)
-│   │   ├── engine.py        # 配置驱动运行时引擎
-│   │   ├── dlq.py           # 死信队列
-│   │   ├── config.py        # 配置加载
-│   │   └── security.py      # Payload 加密
-│   ├── transport/
-│   │   ├── base.py         # Transport ABC
-│   │   ├── redis_streams.py
-│   │   └── kafka_transport.py   # ★ 完整 Kafka 实现
-│   ├── plugin/
-│   │   ├── base.py         # Plugin ABC
-│   │   └── registry.py     # 插件注册中心
-│   ├── agent/
-│   │   ├── base.py         # Agent 基类 (v2: 心跳/重试/DLQ/优雅关闭)
-│   │   ├── supervisor.py   # ★ Agent 生命周期总管
-│   │   ├── probe.py        # 检测 Agent
-│   │   ├── judge.py        # 评判 Agent
-│   │   └── reporter.py     # 报告 Agent
-│   └── plugins/
-│       └── trace_collector.py  # ★ 链路追踪插件
-├── sdk/                    # 外部 Agent SDK
-│   ├── aqa_sdk/            #   Python SDK (独立包)
-│   ├── README.md           #   协议文档 + 多语言示例
-│   └── examples/
-│       ├── go_agent.go     #   Go 外部 Agent 示例
-│       └── js_agent.mjs    #   JS 外部 Agent 示例
-├── Dockerfile              # ★ Docker 构建
-├── docker-compose.yml      # ★ Docker Compose (Redis + AQA)
-├── config.yaml             # 主配置 (完整版)
-├── tests/
-└── examples/
-    └── demo.py             # InMemory Demo
-```
-
----
-
-<br>
-
-## 十二、项目演进
-
-### 2026-06-25 — v2 增强 (7 项改进)
-
-| # | 模块 | 说明 |
-|---|---|---|
-| **1** | **🏭 Engine** `core/engine.py` | 配置驱动运行时, `AQAEngine("config.yaml").run()` 自动创建 Transport/Agent/插件/监控 |
-| **2** | **🔄 生命周期管理** `agent/supervisor.py` | 心跳广播 + 双通道 + 故障自动重启 + SIGTERM 优雅关闭 (drain→cancel→disconnect) |
-| **3** | **⚠️ 死信队列 DLQ** `core/dlq.py` | 消息失败自动构建 DeadLetterRecord, 含重试计数/错误原因/时间戳 |
-| **4** | **📊 TraceCollector 插件** `plugins/trace_collector.py` | 自动记录每条消息的处理耗时 + trace_id + 来源 |
-| **5** | **🔐 Payload 加密** `core/security.py` | PBKDF2 密钥派生 + Fernet AES 加密, 自动在 publish 前加密/subscribe 后解密 |
-| **6** | **📦 Kafka Transport** `transport/kafka_transport.py` | 完整实现 (aiokafka), 消费组/offset/自动提交 |
-| **7** | **🐳 Docker** `Dockerfile` + `docker-compose.yml` | Redis + AQA 一键启动 |
-
-**配置更新**: `config.yaml` 新增 `agents` / `plugins` / `security` / `dlq` 段。
-
-```yaml
-agents:
-  probe-1:    { type: probe, subscribe: ["aqa:broadcast", "aqa:agent:probe"] }
-  judge-1:    { type: judge, subscribe: ["aqa:broadcast", "aqa:agent:judge"] }
-  reporter-1: { type: reporter, subscribe: ["aqa:broadcast", "aqa:agent:reporter"] }
-
-plugins:
-  trace_collector: {}
-  # validator: { threshold: 0.5 }
-
-security:
-  enabled: false
-  # secret: "change-me"   # 启用后加密所有 payload
-
-dlq:
-  topic: "aqa:dlq"
-  retention_hours: 168
-```
-
-**验证**: 36 项测试 (23 核心 + 13 SDK) + Demo 全部通过。
+修改协议时需要同步：
+1. `PROTOCOL.md` — 协议规范
+2. `aqa/core/message.py` — 消息实现
+3. `sdk/aqa_sdk/message.py` — SDK 消息实现
+4. `tests/test_aqa.py` 和 `sdk/tests/test_sdk.py` — 更新测试

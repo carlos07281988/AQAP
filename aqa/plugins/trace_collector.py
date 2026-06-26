@@ -30,7 +30,7 @@ class TraceCollector(Plugin):
         self._buffer: list[dict] = []
 
     async def execute(self, context: dict) -> dict:
-        context_start = context.pop("_aqa_start_time", None)
+        context_start = context.get("_aqa_start_time", None)
         if not context_start:
             return {}
 

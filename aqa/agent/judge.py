@@ -18,6 +18,16 @@ class JudgeAgent(Agent):
     4. 触发报告生成 (REPORT_REQUEST)
     """
 
+    def __init__(
+        self,
+        agent_id: str,
+        transport,
+        reporter_target: str = "reporter-1",
+        **kwargs,
+    ):
+        super().__init__(agent_id, transport, **kwargs)
+        self._reporter_target = reporter_target
+
     @property
     def agent_type(self) -> str:
         return "judge"
@@ -45,7 +55,7 @@ class JudgeAgent(Agent):
                     "verdict": verdict,
                 },
             )
-            report_msg.target = "reporter-1"
+            report_msg.target = self._reporter_target
             replies.append(report_msg)
 
         return replies or None

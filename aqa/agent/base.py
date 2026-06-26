@@ -59,7 +59,11 @@ class Agent(ABC):
         self._current_message: Message | None = None
         # 最近一次收到的 message_id (用于 ack)
         self._last_topic: str = ""
+        self._last_group: str = ""
         self._last_msg_id: str | None = None
+        # 幂等去重 — 已处理消息 ID 缓存 (最多保留 10000 条)
+        self._processed_ids: set[str] = set()
+        self._idempotency_max_size: int = 10000
 
     @property
     @abstractmethod
@@ -164,13 +168,27 @@ class Agent(ABC):
             if not self._running:
                 break
 
-            # 记录当前 topic 和 transport 层 msg_id (用于 ack)
+            # 记录当前 topic、group 和 transport 层 msg_id (用于 ack)
             self._last_topic = str(topic)
+            self._last_group = self._group
             self._last_msg_id = getattr(message, "_transport_msg_id", None)
 
             # 忽略回声
             if message.source == self.agent_id:
                 continue
+
+            # 幂等去重 — 重复 message_id 直接跳过 (PROTOCOL.md §8.5)
+            msg_id = message.message_id
+            if msg_id in self._processed_ids:
+                logger.debug(
+                    "[%s] 跳过重复消息 %s (trace=%s)",
+                    self.agent_id, msg_id, message.trace_id,
+                )
+                continue
+            self._processed_ids.add(msg_id)
+            # 限制缓存大小
+            if len(self._processed_ids) > self._idempotency_max_size:
+                self._processed_ids = set(list(self._processed_ids)[-5000:])
 
             # 校验消息格式 (PROTOCOL.md §1)
             raw = message.to_dict()
@@ -218,8 +236,8 @@ class Agent(ABC):
                 )
                 self._current_message = None
                 await self._handle_failure(message, str(e), str(topic))
-
-            await self._transport.ack(self._last_topic, self._last_msg_id)
+            if self._last_msg_id:
+                await self._transport.ack(topic, self._last_msg_id, self._last_group)
 
     def _determine_reply_topic(self, message: Message) -> str:
         """根据收到消息的 topic 决定回复发往哪个 topic"""
@@ -259,8 +277,8 @@ class Agent(ABC):
                 self._max_retries,
             )
             self._retry_counts.pop(msg_key, None)
-            # 手动 ack 防止 pending 无限增长
-            await self._transport.ack(topic, self._last_msg_id)
+            if self._last_msg_id:
+                await self._transport.ack(topic, self._last_msg_id, self._last_group)
         else:
             logger.info(
                 "[%s] 消息 %s 重试 %d/%d",

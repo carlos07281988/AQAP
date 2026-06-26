@@ -44,7 +44,7 @@ class ReporterAgent(Agent):
                 payload=report,
                 trace_id=message.trace_id,
             )
-            await self._transport.publish(Topic.BROADCAST, broadcast)
+            await self.send(broadcast)
 
         return replies or None
 

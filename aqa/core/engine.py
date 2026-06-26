@@ -41,25 +41,16 @@ def _discover_transports():
 
     TRANSPORT_MAP["redis-streams"] = RedisStreamsTransport
 
+    from aqa.transport.inmemory import InMemoryTransport
+
+    TRANSPORT_MAP["in-memory"] = InMemoryTransport
+
     try:
         from aqa.transport.kafka_transport import KafkaTransport
 
         TRANSPORT_MAP["kafka"] = KafkaTransport
     except ImportError:
         pass
-
-    try:
-        import aqa.transport.in_memory as _mem
-
-        TRANSPORT_MAP["in-memory"] = _mem.InMemoryTransport
-    except (ImportError, AttributeError):
-        # InMemoryTransport 可能在 transport 层或 demo 中
-        try:
-            from aqa.transport.in_memory import InMemoryTransport
-
-            TRANSPORT_MAP["in-memory"] = InMemoryTransport
-        except ImportError:
-            pass
 
 
 # Agent 类型映射
@@ -249,6 +240,7 @@ class AQAEngine:
                 max_retries=max_retries,
                 heartbeat_interval=heartbeat_interval,
                 cipher=self._cipher,
+                **cfg.get("targets", {}),
             )
 
             # 订阅 topic

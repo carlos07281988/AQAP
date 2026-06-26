@@ -162,6 +162,7 @@ class _TestTransport(Transport):
         self._queues: dict[str, asyncio.Queue] = {}
         self._subs: dict[str, list[asyncio.Queue]] = {}
         self._running = True
+        self.published: list[tuple[str, Message]] = []  # 追踪发布消息
 
     @property
     def name(self):
@@ -174,6 +175,7 @@ class _TestTransport(Transport):
 
     async def publish(self, topic, message):
         t = str(topic.value) if isinstance(topic, Topic) else topic
+        self.published.append((t, message))
         for q in self._subs.get(t, []):
             await q.put(message)
 
@@ -214,13 +216,18 @@ class TestAgentIntegration:
         probe = ProbeAgent("probe-test", transport)
         probe.subscribe_to("aqa:broadcast")
         await probe.start()
+        await asyncio.sleep(0.05)  # 等 consume loop 启动
         await transport.publish(
             "aqa:broadcast",
             task_dispatch("cli", {"task_id": "t-001"}),
         )
         await asyncio.sleep(0.3)
         await probe.stop()
-        assert True
+
+        # 验证 probe 处理了 dispatch 消息并生成了回复
+        delivered_types = [m.type for t, m in transport.published]
+        assert MessageType.TASK_RESULT in delivered_types
+        assert MessageType.JUDGE_REQUEST in delivered_types
 
     @pytest.mark.asyncio
     async def test_full_flow_in_memory(self):
@@ -234,10 +241,13 @@ class TestAgentIntegration:
 
         probe.subscribe_to(Topic.AGENT_PROBE)
         judge.subscribe_to(Topic.AGENT_JUDGE)
+        judge.subscribe_to(Topic.agent_inbox("judge-1"))
         reporter.subscribe_to(Topic.AGENT_REPORTER)
+        reporter.subscribe_to(Topic.agent_inbox("reporter-1"))
 
         await asyncio.gather(probe.start(), judge.start(), reporter.start())
 
+        await asyncio.sleep(0.05)  # 等所有 consume loop 启动
         await transport.publish(
             Topic.AGENT_PROBE,
             task_dispatch("tester", {"task_id": "full-test", "x": 21}),
@@ -246,7 +256,12 @@ class TestAgentIntegration:
 
         await asyncio.gather(probe.stop(), judge.stop(), reporter.stop())
         await registry.cleanup_all()
-        assert True
+
+        # 验证完整消息链: dispatch → result → verdict → deliver
+        delivered_types = [m.type for t, m in transport.published]
+        assert MessageType.TASK_RESULT in delivered_types
+        assert MessageType.JUDGE_VERDICT in delivered_types
+        assert MessageType.REPORT_DELIVER in delivered_types
 
 
 class TestDLQ:
@@ -317,6 +332,46 @@ class TestSecurity:
 
         cipher = PayloadCipher("test-secret")
         assert cipher.decrypt_payload({"task_id": "plain"}) == {"task_id": "plain"}
+
+
+class TestCrossLayerConsistency:
+    """跨层一致性测试 — 核心与 SDK 保持同步"""
+
+    def _run_validate_on(self, validate_fn, cases):
+        errors = []
+        for case in cases:
+            result = validate_fn(case)
+            errors.append(result)
+        return errors
+
+    def test_validate_message_sync(self):
+        """核心和 SDK 的 validate_message 必须输出一致"""
+        from aqa.core.message import validate_message as core_validate
+        from aqa_sdk.message import validate_message as sdk_validate
+
+        test_cases = [
+            {"type": "TASK_DISPATCH", "source": "tester",
+             "payload": {"ok": True}, "version": "1.0"},
+            {"type": "TASK_DISPATCH", "source": "",        # source 为空
+             "payload": {"ok": True}, "version": "1.0"},
+            {"type": "UNKNOWN", "source": "x",
+             "payload": {}, "version": "1.0"},             # 未知 type
+            {"type": "SHUTDOWN", "source": "x",
+             "payload": {}, "version": "2.0"},             # 版本过高
+            {"type": "HEARTBEAT", "source": "worker-1",
+             "payload": {}, "version": "1.0"},             # 有效
+        ]
+
+        core_results = [core_validate(c) for c in test_cases]
+        sdk_results = [sdk_validate(c) for c in test_cases]
+        assert core_results == sdk_results, (
+            "核心和 SDK 的 validate_message 输出不一致\n"
+            + "\n".join(
+                f"  case[{i}]: core={c}, sdk={s}"
+                for i, (c, s) in enumerate(zip(core_results, sdk_results))
+                if c != s
+            )
+        )
 
 
 class TestTraceCollector:

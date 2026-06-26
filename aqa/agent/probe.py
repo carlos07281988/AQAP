@@ -23,6 +23,16 @@ class ProbeAgent(Agent):
     4. 请求评判 (JUDGE_REQUEST)
     """
 
+    def __init__(
+        self,
+        agent_id: str,
+        transport,
+        judge_target: str = "judge-1",
+        **kwargs,
+    ):
+        super().__init__(agent_id, transport, **kwargs)
+        self._judge_target = judge_target
+
     @property
     def agent_type(self) -> str:
         return "probe"
@@ -42,7 +52,7 @@ class ProbeAgent(Agent):
                 MessageType.JUDGE_REQUEST,
                 payload={"task": message.payload, "result": result},
             )
-            judge_msg.target = "judge-1"
+            judge_msg.target = self._judge_target
             replies.append(judge_msg)
 
         return replies or None

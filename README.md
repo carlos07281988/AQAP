@@ -1,4 +1,4 @@
-# AQA — Agent Queue Agent Communication Protocol
+# AQAP — Agent Queue Agent Communication Protocol
 
 基于消息队列的 Agent 间通信协议与质量保障系统。
 

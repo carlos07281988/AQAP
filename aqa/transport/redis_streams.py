@@ -16,6 +16,7 @@ class RedisStreamsTransport(Transport):
     - XADD → XREADGROUP → XACK 模式
     - 每个 Agent 属于一个 consumer group
     - 支持故障转移: 挂掉的 consumer 未 ACK 的消息会被重新投递
+    - 使用 setattr 注入 _transport_msg_id (避免污染 Message 的数据序列化)
     """
 
     def __init__(self, redis_url: str = "redis://127.0.0.1:6379/0"):
@@ -115,9 +116,8 @@ class RedisStreamsTransport(Transport):
                                 except (json.JSONDecodeError, TypeError):
                                     raw[k] = v
                             message = Message.from_dict(raw)
-                            # 携带 message_id 用于 ack
-                            message.headers["_redis_msg_id"] = msg_id
-                            message.headers["_redis_stream"] = stream_name
+                            # 使用 setattr 注入 transport 层 msg_id (不会被序列化)
+                            setattr(message, "_transport_msg_id", msg_id)
                             yield message
                         except Exception as e:
                             print(f"[transport] 消息解析失败 ({msg_id}): {e}")
@@ -133,10 +133,3 @@ class RedisStreamsTransport(Transport):
         if message_id:
             r = await self._get_redis()
             await r.xack(topic_str, "aqa-default", message_id)
-
-    async def ack_message(self, message: Message):
-        """便捷方法: 从消息 header 中提取 stream/message_id 并 ACK"""
-        stream = message.headers.get("_redis_stream")
-        msg_id = message.headers.get("_redis_msg_id")
-        if stream and msg_id:
-            await self.ack(stream, msg_id)

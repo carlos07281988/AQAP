@@ -1,11 +1,12 @@
 """Agent 基类 — 所有 AQA Agent 的通用骨架
 
 v2 改进:
-  - 消息重试 + DLQ 转发 (max_retries 配置)
-  - 心跳广播到 BROADCAST + SYSTEM_EVENTS 双通道
+  - 消息重试 + DLG 转发 (max_retries 配置)
+  - 心跳广播到 BR0ADCAST + SYSTEM_EVENTS 双通道
   - 向插件 context 注入 _aqa_start_time/_aqa_trace_id 供 TraceCollector
   - 优雅关闭时 drain 当前处理的消息
   - _current_message 追踪: run_plugins 自动注入追踪上下文
+  - 消息到达时 validate_message 校验
 """
 from __future__ import annotations
 
@@ -17,7 +18,13 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from aqa.core.dlq import DLQ_TOPIC, create_dlq_message
-from aqa.core.message import Message, MessageType, Topic, heartbeat
+from aqa.core.message import (
+    Message,
+    MessageType,
+    Topic,
+    heartbeat,
+    validate_message,
+)
 from aqa.core.security import PayloadCipher
 from aqa.plugin.registry import registry
 from aqa.transport.base import Transport
@@ -50,6 +57,9 @@ class Agent(ABC):
         self._retry_counts: dict[str, int] = {}
         # 当前正在处理的消息 (供 run_plugins 注入追踪上下文)
         self._current_message: Message | None = None
+        # 最近一次收到的 message_id (用于 ack)
+        self._last_topic: str = ""
+        self._last_msg_id: str | None = None
 
     @property
     @abstractmethod
@@ -107,7 +117,7 @@ class Agent(ABC):
 
         await self._transport.publish(
             Topic.SYSTEM_EVENTS,
-            Message(type=MessageType.SHUTDOWN, source=self.agent_id),
+            Message(type=MessageType.SHUTDOWN, source=self.agent_id, payload={}),
         )
 
         # drain: 等待进行中的任务完成 (最多 5s)
@@ -154,8 +164,23 @@ class Agent(ABC):
             if not self._running:
                 break
 
+            # 记录当前 topic 和 transport 层 msg_id (用于 ack)
+            self._last_topic = str(topic)
+            self._last_msg_id = getattr(message, "_transport_msg_id", None)
+
             # 忽略回声
             if message.source == self.agent_id:
+                continue
+
+            # 校验消息格式 (PROTOCOL.md §1)
+            raw = message.to_dict()
+            validation_errors = validate_message(raw)
+            if validation_errors:
+                logger.warning(
+                    "[%s] 消息校验失败 trace_id=%s: %s",
+                    self.agent_id, message.trace_id, "; ".join(validation_errors),
+                )
+                # 校验失败 → ack 丢弃, 不重试
                 continue
 
             # 解密 payload
@@ -175,7 +200,7 @@ class Agent(ABC):
                         topic_to_use = (
                             Topic.agent_inbox(reply.target)
                             if reply.target
-                            else Topic.agent_inbox(self.agent_id)
+                            else self._determine_reply_topic(message)
                         )
                         reply.payload = self._cipher.encrypt_payload(reply.payload)
                         await self._transport.publish(topic_to_use, reply)
@@ -192,13 +217,20 @@ class Agent(ABC):
                     e,
                 )
                 self._current_message = None
-                await self._handle_failure(message, str(e))
+                await self._handle_failure(message, str(e), str(topic))
 
-            # ACK — getattr 兼容无 headers 字段的 Message
-            msg_id = getattr(message, "headers", {}).get("_redis_msg_id")
-            await self._transport.ack(topic, msg_id)
+            await self._transport.ack(self._last_topic, self._last_msg_id)
 
-    async def _handle_failure(self, message: Message, error: str):
+    def _determine_reply_topic(self, message: Message) -> str:
+        """根据收到消息的 topic 决定回复发往哪个 topic"""
+        topic_map = {
+            Topic.AGENT_PROBE: Topic.AGENT_JUDGE,
+            Topic.AGENT_JUDGE: Topic.AGENT_REPORTER,
+            Topic.AGENT_REPORTER: Topic.BROADCAST,
+        }
+        return topic_map.get(message.topic, Topic.agent_inbox(message.source))
+
+    async def _handle_failure(self, message: Message, error: str, topic: str):
         msg_key = self._msg_key(message)
         retry_count = self._retry_counts.get(msg_key, 0) + 1
         self._retry_counts[msg_key] = retry_count
@@ -227,12 +259,8 @@ class Agent(ABC):
                 self._max_retries,
             )
             self._retry_counts.pop(msg_key, None)
-            # 不 ACK → 消息留 pending, 但已进死信, 手动 ACK 防止积累
-            # 注意: 这里需要 ACK 否则 pending 列表会无限增长
-            msg_id = getattr(message, "headers", {}).get("_redis_msg_id")
-            if msg_id:
-                # 需要知道 topic, 但这里不知道... 由 _consume_loop 处理
-                pass
+            # 手动 ack 防止 pending 无限增长
+            await self._transport.ack(topic, self._last_msg_id)
         else:
             logger.info(
                 "[%s] 消息 %s 重试 %d/%d",
@@ -250,14 +278,13 @@ class Agent(ABC):
 
     async def run_plugins(self, topic: str, context: dict) -> list[dict]:
         """执行指定 topic 的所有插件, 自动注入追踪上下文"""
+        ctx = context.copy() if context else {}
         if self._current_message:
-            ctx = context.copy() if context else {}
             ctx["_aqa_start_time"] = _time.time()
             ctx["_aqa_trace_id"] = self._current_message.trace_id
             ctx["_aqa_message_type"] = str(self._current_message.type)
             ctx["_aqa_source"] = self._current_message.source
-            return await registry.execute_all(topic, ctx)
-        return await registry.execute_all(topic, context)
+        return await registry.execute_all(topic, ctx)
 
     async def send(self, message: Message):
         if message.target:

@@ -457,13 +457,15 @@ docker compose logs -f
 
 ```
 AQA/
-├── aqa/                    # AQA 内核
+├── PROTOCOL.md              # ★ 通信协议规范 (JSON Schema / 状态机 / 路由规则)
+├── README.md                # 项目文档
+├── aqa/                     # AQA 内核
 │   ├── core/
-│   │   ├── message.py      # 消息协议实现
-│   │   ├── config.py       # 配置加载
-│   │   ├── engine.py       # ★ 配置驱动运行时引擎
-│   │   ├── dlq.py          # ★ 死信队列模块
-│   │   └── security.py     # ★ Payload 加密 (Fernet AES)
+│   │   ├── message.py       # 消息协议实现 (遵循 PROTOCOL.md)
+│   │   ├── engine.py        # 配置驱动运行时引擎
+│   │   ├── dlq.py           # 死信队列
+│   │   ├── config.py        # 配置加载
+│   │   └── security.py      # Payload 加密
 │   ├── transport/
 │   │   ├── base.py         # Transport ABC
 │   │   ├── redis_streams.py

@@ -43,7 +43,7 @@ class TestMessageProtocol:
         assert reply.type == MessageType.TASK_RESULT
         assert reply.target == "probe-1"
         assert reply.trace_id == incoming.trace_id
-        assert reply.correlation_id == incoming.trace_id
+        assert reply.correlation_id == incoming.message_id
 
     def test_heartbeat(self):
         msg = heartbeat("probe-1", {"alive": True, "uptime": 60})
@@ -116,7 +116,7 @@ class TestMessageRouting:
         result = task_result("probe-1", {"task_id": "t-001", "passed": True, "score": 0.9})
         judge_req = result.reply(MessageType.JUDGE_REQUEST, {"evidence": result.payload})
         assert judge_req.type == MessageType.JUDGE_REQUEST
-        assert judge_req.correlation_id == result.trace_id
+        assert judge_req.correlation_id == result.message_id
 
     @pytest.mark.asyncio
     async def test_judge_to_report_flow(self):

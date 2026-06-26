@@ -40,6 +40,7 @@ class AgentSupervisor:
     def record_heartbeat(self, agent_id: str):
         """记录 Agent 心跳时间戳"""
         self._last_heartbeat[agent_id] = time.time()
+        logger.debug("[supervisor] 心跳记录: %s", agent_id)
 
     async def start_all(self):
         """启动所有 Agent"""
@@ -87,9 +88,13 @@ class AgentSupervisor:
         logger.info("[supervisor] 重启 Agent: %s", agent_id)
         try:
             await agent.stop()
-        except Exception:
-            pass
-        await agent.start()
+        except Exception as e:
+            logger.error("[supervisor] Agent %s 停止失败 (忽略): %s", agent_id, e)
+        try:
+            await agent.start()
+            logger.info("[supervisor] Agent %s 重启完成", agent_id)
+        except Exception as e:
+            logger.error("[supervisor] Agent %s 重启失败: %s", agent_id, e)
 
     async def health_check(self) -> dict[str, Any]:
         """返回所有 Agent 的健康状态"""
@@ -134,6 +139,9 @@ class AgentSupervisor:
         """监控循环 — 检查心跳超时并重启失联 Agent"""
         while self._running:
             status = await self.health_check()
+            stale_count = sum(1 for s in status["agents"].values() if s.get("status") == "stale")
+            if stale_count:
+                logger.warning("[supervisor] 监控检测: %d 个 Agent 失联", stale_count)
             for agent_id, s in status["agents"].items():
                 if s.get("status") == "stale":
                     logger.warning(

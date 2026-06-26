@@ -4,7 +4,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import AsyncGenerator, Callable
 
+import logging
+
 from aqa.core.message import Message, Topic
+
+logger = logging.getLogger("aqa.transport")
 
 
 class Transport(ABC):

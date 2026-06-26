@@ -1,10 +1,19 @@
 # AQA 系统配置 — 完整版
-# 全部可配: Transport / Agent / 插件 / 安全 / 死信 / 监控
+# 全部可配: Transport / Agent / 插件 / 安全 / 死信 / 监控 / 日志
 
 app:
   name: "Agent Quality Assurance"
   version: "1.0.0"
   debug: true
+
+# ── 日志配置 ──
+logging:
+  level: "DEBUG"          # 全局日志级别: DEBUG | INFO | WARNING | ERROR
+  format: "detailed"      # standard | detailed (含文件:行号)
+  # 按模块覆盖日志级别
+  loggers:
+    aqa.transport.redis_streams: "DEBUG"
+    aqa.transport.kafka: "WARNING"
 
 # ── 消息队列后端 ──
 # backend: redis-streams | kafka | in-memory

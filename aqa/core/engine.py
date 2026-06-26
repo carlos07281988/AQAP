@@ -23,6 +23,7 @@ from aqa.agent.probe import ProbeAgent
 from aqa.agent.reporter import ReporterAgent
 from aqa.agent.supervisor import AgentSupervisor
 from aqa.core.config import AQAConfig
+from aqa.core.log_config import setup_logging
 from aqa.core.security import PayloadCipher
 from aqa.plugin.registry import registry
 from aqa.transport.base import Transport
@@ -92,6 +93,11 @@ class AQAEngine:
         logger.info("=" * 50)
         logger.info("AQA Engine 启动中...")
         logger.info("=" * 50)
+
+        # 初始化日志系统 (读取 config.yaml 的 logging 段)
+        logging_cfg = self._config.get("logging")
+        setup_logging(debug=self._config.debug, config=logging_cfg)
+        logger.info("AQA Engine v%s starting", self._config.get("app", "version", default="?"))
 
         _discover_transports()
 

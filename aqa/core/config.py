@@ -1,9 +1,12 @@
 """AQA 配置加载器 — YAML + 环境变量合并"""
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger("aqa.core.config")
 
 
 class AQAConfig:
@@ -59,7 +62,7 @@ class AQAConfig:
         with open(p) as f:
             user_config = yaml.safe_load(f) or {}
         self._deep_merge(self._data, user_config)
-        print(f"[config] 已加载配置: {path}")
+        logger.info("配置加载完成: %s", path)
 
     def _deep_merge(self, base: dict, override: dict):
         for key, value in override.items():

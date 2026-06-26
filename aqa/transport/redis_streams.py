@@ -39,13 +39,13 @@ class RedisStreamsTransport(Transport):
     async def connect(self):
         r = await self._get_redis()
         await r.ping()
-        print(f"[transport] Redis Streams 已连接: {self.redis_url}")
+        logger.info("[redis-streams] 已连接: %s", self.redis_url)
 
     async def disconnect(self):
         if self._redis:
             await self._redis.close()
             self._redis = None
-            print("[transport] Redis Streams 已断开")
+            logger.info("[redis-streams] 已断开")
 
     async def create_group(self, topic: str | Topic, group: str):
         topic_str = str(topic.value) if isinstance(topic, Topic) else topic
@@ -60,7 +60,7 @@ class RedisStreamsTransport(Transport):
         except Exception as e:
             # BUSYGROUP: group 已存在, 静默跳过
             if "BUSYGROUP" not in str(e):
-                print(f"[transport] WARN 创建 group {group}@{topic_str}: {e}")
+                logger.warning("[redis-streams] 创建 group %s@%s: %s", group, topic_str, e)
         self._groups_created.add(topic_str)
 
     async def publish(self, topic: str | Topic, message: Message):
@@ -120,12 +120,12 @@ class RedisStreamsTransport(Transport):
                             setattr(message, "_transport_msg_id", msg_id)
                             yield message
                         except Exception as e:
-                            print(f"[transport] 消息解析失败 ({msg_id}): {e}")
+                            logger.error("[redis-streams] 消息解析失败 (%s): %s", msg_id, e)
                             # 解析失败的消息也要 ACK 掉避免阻塞
                             await self.ack(topic_str, msg_id)
 
             except Exception as e:
-                print(f"[transport] XREADGROUP 错误: {e}")
+                logger.error("[redis-streams] XREADGROUP 错误: %s", e)
                 await asyncio.sleep(1)
 
     async def ack(self, topic: str | Topic, message_id: str | None = None, group: str = "aqa-default"):

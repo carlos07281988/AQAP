@@ -1,6 +1,7 @@
 """Probe Agent — 检测执行器"""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from aqa.core.message import (
@@ -10,6 +11,8 @@ from aqa.core.message import (
     task_result,
 )
 from aqa.agent.base import Agent
+
+logger = logging.getLogger("aqa.agent.probe")
 
 
 class ProbeAgent(Agent):
@@ -41,6 +44,7 @@ class ProbeAgent(Agent):
         replies = []
 
         if message.type == MessageType.TASK_DISPATCH:
+            logger.info("[%s] 收到检测任务 trace_id=%s", self.agent_id, message.trace_id)
             # 执行检测
             result = await self._probe(message.payload)
 
@@ -61,14 +65,17 @@ class ProbeAgent(Agent):
         """执行检测逻辑 — 调用插件"""
         # 运行绑定到 "probe" topic 的插件
         plugin_results = await self.run_plugins("probe", task)
+        task_id = task.get("task_id", "unknown")
+        passed = all(
+            r.get("result", {}).get("passed", True)
+            for r in plugin_results
+            if r["error"] is None
+        )
+        logger.info("[%s] 检测完成 task_id=%s passed=%s", self.agent_id, task_id, passed)
 
         return {
-            "task_id": task.get("task_id", "unknown"),
+            "task_id": task_id,
             "agent": self.agent_id,
             "plugin_results": plugin_results,
-            "passed": all(
-                r.get("result", {}).get("passed", True)
-                for r in plugin_results
-                if r["error"] is None
-            ),
+            "passed": passed,
         }

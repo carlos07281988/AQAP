@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 from typing import Any
+
+logger = logging.getLogger("aqa.core.security")
 
 CRYPTO_AVAILABLE = False
 try:

@@ -92,6 +92,7 @@ class Agent(ABC):
         self._running = True
         await self._transport.connect()
         await self.on_start()
+        logger.info("[%s] on_start 完成", self.agent_id)
 
         # 注册到系统
         await self._transport.publish(
@@ -158,6 +159,7 @@ class Agent(ABC):
             msg = heartbeat(self.agent_id)
             await self._transport.publish(Topic.BROADCAST, msg)
             await self._transport.publish(Topic.SYSTEM_EVENTS, msg)
+            logger.debug("[%s] 心跳发送", self.agent_id)
             await asyncio.sleep(self._heartbeat_interval)
 
     async def _consume_loop(self, topic: str | Topic):
@@ -167,6 +169,8 @@ class Agent(ABC):
         ):
             if not self._running:
                 break
+
+            logger.debug("[%s] 收到消息 trace_id=%s type=%s", self.agent_id, message.trace_id, message.type)
 
             # 记录当前 topic、group 和 transport 层 msg_id (用于 ack)
             self._last_topic = str(topic)
@@ -306,6 +310,8 @@ class Agent(ABC):
 
     async def send(self, message: Message):
         if message.target:
+            logger.debug("[%s] 发送 → %s (type=%s)", self.agent_id, message.target, message.type)
             await self._transport.publish(Topic.agent_inbox(message.target), message)
         else:
+            logger.debug("[%s] 发送 → BROADCAST (type=%s)", self.agent_id, message.type)
             await self._transport.publish(Topic.BROADCAST, message)

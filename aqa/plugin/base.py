@@ -1,8 +1,11 @@
-"""Plugin 基类 — 所有 AQA 插件的统一接口"""
+"""插件基类 — 所有 AQA 插件必须继承此类"""
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Any
+
+logger = logging.getLogger("aqa.plugin.base")
 
 
 class Plugin(ABC):

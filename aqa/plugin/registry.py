@@ -1,9 +1,12 @@
 """插件注册中心 — 管理插件的生命周期与路由"""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from aqa.plugin.base import Plugin
+
+logger = logging.getLogger("aqa.plugin.registry")
 
 
 class PluginRegistry:
@@ -28,12 +31,12 @@ class PluginRegistry:
         if topics:
             for topic in topics:
                 self._topic_mapping.setdefault(topic, []).append(plugin.name)
-        print(f"[plugin] 已注册: {plugin}")
+        logger.info("[registry] 插件已注册: %s → topics=%s", plugin.name, topics or "none")
 
     def unregister(self, name: str) -> bool:
         """注销插件 (热卸载)"""
         if name not in self._plugins:
-            print(f"[plugin] 插件 {name} 未注册")
+            logger.warning("[registry] 插件 %s 未注册, 忽略卸载", name)
             return False
 
         plugin = self._plugins.pop(name)
@@ -44,7 +47,7 @@ class PluginRegistry:
             if not plugins:
                 del self._topic_mapping[topic]
 
-        print(f"[plugin] 已注销: {plugin}")
+        logger.info("[registry] 插件已注销: %s", name)
         return True
 
     # ── 查询 ──
@@ -65,7 +68,12 @@ class PluginRegistry:
     async def execute_all(self, topic: str, context: dict) -> list[dict[str, Any]]:
         """执行绑定到 topic 的所有插件"""
         results = []
-        for plugin in self.get_for_topic(topic):
+        plugins = self.get_for_topic(topic)
+        if not plugins:
+            logger.debug("[registry] topic=%s 无绑定插件, 跳过", topic)
+            return results
+        logger.debug("[registry] 执行 topic=%s 共 %d 个插件", topic, len(plugins))
+        for plugin in plugins:
             try:
                 result = await plugin.execute(context)
                 results.append({"plugin": plugin.name, "result": result, "error": None})

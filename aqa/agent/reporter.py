@@ -1,10 +1,13 @@
 """Reporter Agent — 报告生成器"""
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from aqa.core.message import Message, MessageType, Topic
 from aqa.agent.base import Agent
+
+logger = logging.getLogger("aqa.agent.reporter")
 
 
 class ReporterAgent(Agent):
@@ -25,6 +28,7 @@ class ReporterAgent(Agent):
         replies = []
 
         if message.type == MessageType.REPORT_REQUEST:
+            logger.info("[%s] 收到报告请求 trace_id=%s", self.agent_id, message.trace_id)
             report = await self._generate_report(message.payload)
 
             deliver_msg = Message(
@@ -51,9 +55,11 @@ class ReporterAgent(Agent):
     async def _generate_report(self, data: dict) -> dict:
         """生成质量报告"""
         plugin_results = await self.run_plugins("reporter", data)
+        task_id = data.get("task", {}).get("task_id", "unknown")
+        logger.info("[%s] 报告生成完成 task_id=%s", self.agent_id, task_id)
 
         return {
-            "task_id": data.get("task", {}).get("task_id", "unknown"),
+            "task_id": task_id,
             "title": f"AQA Report — {data.get('task', {}).get('name', 'unknown')}",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "score": data.get("verdict", {}).get("score", 0.0),

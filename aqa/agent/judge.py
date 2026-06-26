@@ -1,10 +1,13 @@
 """Judge Agent — 评判裁决器"""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from aqa.core.message import Message, MessageType, judge_verdict
 from aqa.agent.base import Agent
+
+logger = logging.getLogger("aqa.agent.judge")
 
 
 class JudgeAgent(Agent):
@@ -36,6 +39,7 @@ class JudgeAgent(Agent):
         replies = []
 
         if message.type == MessageType.JUDGE_REQUEST:
+            logger.info("[%s] 收到评判请求 trace_id=%s", self.agent_id, message.trace_id)
             evidence = message.payload
             verdict = await self._judge(evidence)
 
@@ -78,9 +82,11 @@ class JudgeAgent(Agent):
                 passed = False
 
         avg_score = sum(scores) / len(scores) if scores else 0.0
+        task_id = evidence.get("task", {}).get("task_id", "unknown")
+        logger.info("[%s] 评判完成 task_id=%s score=%s passed=%s", self.agent_id, task_id, round(avg_score, 4), passed)
 
         return {
-            "task_id": evidence.get("task", {}).get("task_id", "unknown"),
+            "task_id": task_id,
             "agent": self.agent_id,
             "score": round(avg_score, 4),
             "passed": passed,

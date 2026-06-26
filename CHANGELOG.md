@@ -2,6 +2,34 @@
 
 本文件记录 AQA 项目的所有代码修改。按时间倒序排列。
 
+## 2026-06-27 — 全项目结构化日志接入
+
+### 新增
+- **`aqa/core/log_config.py`** — 统一日志初始化模块
+  - `setup_logging()` 支持 DEBUG/INFO 级别，控制台彩色输出格式
+  - 从 `config.yaml` 的 `logging.level` 加载日志级别
+- **`config.yaml`** — 新增 `logging` 配置段 (默认 DEBUG 级别)
+
+### 变更
+- **全部 10 个模块添加 `logging.getLogger()`** 并替换原有的 `print()` 调用：
+  - `aqa/core/config.py` — print → logger.info 配置加载
+  - `aqa/core/security.py` — 新增 logger
+  - `aqa/core/engine.py` — 启动时调用 setup_logging，增加版本日志
+  - `aqa/agent/base.py` — 增强 DEBUG 日志：心跳、消息收发、消费循环
+  - `aqa/agent/probe.py` — 新增 INFO 日志：task_id/passed 追踪
+  - `aqa/agent/judge.py` — 新增 INFO 日志：score/passed 追踪
+  - `aqa/agent/reporter.py` — 新增 INFO 日志：task_id 追踪
+  - `aqa/agent/supervisor.py` — 增强日志：心跳记录、重启日志、失联Agent统计
+  - `aqa/transport/inmemory.py` — print → logger.info/debug
+  - `aqa/transport/redis_streams.py` — print → logger.info/warning/error
+  - `aqa/plugin/registry.py` — print → logger.info/warning/debug
+  - `aqa/plugin/base.py` — 新增 logger
+
+### 影响
+- 【无行为变更】日志是附加层，不影响消息路由或业务逻辑
+- 开发者无需额外配置即可看到格式化日志输出
+- 生产环境可修改 `config.yaml` 的 `logging.level` 控制日志粒度
+
 ---
 
 ## 2026-06-27 — 测试修复 + 全流程验证

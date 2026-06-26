@@ -202,11 +202,16 @@ PYTHONPATH=. ./venv/bin/python -m pytest tests/ sdk/tests/ -v
 
 # 3. 运行 InMemory Demo (无需 Redis)
 PYTHONPATH=. ./venv/bin/python examples/demo.py
+# 日志输出格式: [2026-06-27 10:30:00] [aqa.agent.probe] [INFO] ...
 
-# 4. 使用 Engine 启动全部 Agent (配置驱动)
+# 4. 调整日志级别 (修改 config.yaml)
+# logging:
+#   level: "DEBUG"    # 开发调试; "INFO"=生产
+
+# 5. 使用 Engine 启动全部 Agent (配置驱动)
 PYTHONPATH=. ./venv/bin/python -m aqa.run
 
-# 5. 使用 Docker Compose (Redis + AQA)
+# 6. 使用 Docker Compose (Redis + AQA)
 docker compose up -d
 docker compose logs -f
 ```
@@ -233,6 +238,7 @@ AQA/
 │   │   ├── message.py       # 消息协议实现 (遵循 PROTOCOL.md)
 │   │   ├── engine.py        # 配置驱动运行时引擎
 │   │   ├── dlq.py           # 死信队列
+│   │   ├── log_config.py    # 日志初始化 (从 config.yaml 读取级别)
 │   │   ├── config.py        # 配置加载
 │   │   └── security.py      # Payload AES 加密
 │   ├── transport/

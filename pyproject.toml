@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aqa"
 version = "1.0.0"
-description = "Agent Quality Assurance — 基于队列协议的 Agent 通信与质量保障系统"
+description = "Agent Queue Agent Communication Protocol — 基于队列协议的 Agent 通信与质量保障系统"
 requires-python = ">=3.9"
 
 [project.optional-dependencies]

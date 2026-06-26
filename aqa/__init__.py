@@ -1,4 +1,4 @@
-"""AQA 系统 — Agent Quality Assurance"""
+"""AQA — Agent Queue Agent Communication Protocol"""
 from __future__ import annotations
 
 from aqa.core.message import Message, MessageType, Topic

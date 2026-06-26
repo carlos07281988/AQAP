@@ -1,6 +1,6 @@
-# AQA — Agent Quality Assurance
+# AQA — Agent Queue Agent Communication Protocol
 
-基于消息队列的 Agent 质量保障系统。
+基于消息队列的 Agent 间通信协议与质量保障系统。
 
 **队列即协议** — Agent 之间没有直接引用、没有函数调用、没有 HTTP 端点。
 通信的唯一原语是 **往某个 topic 发一条消息**，别的 Agent 从 topic 上消费。

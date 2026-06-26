@@ -1,4 +1,4 @@
-# AQA SDK — Agent Quality Assurance 外部 Agent 接入工具包
+# AQA SDK — Agent Queue Agent Communication Protocol 外部 Agent 接入工具包
 
 ## 一句话
 

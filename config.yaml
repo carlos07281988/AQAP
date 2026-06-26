@@ -2,7 +2,7 @@
 # 全部可配: Transport / Agent / 插件 / 安全 / 死信 / 监控 / 日志
 
 app:
-  name: "Agent Quality Assurance"
+  name: "Agent Queue Agent Communication Protocol"
   version: "1.0.0"
   debug: true
 

@@ -3,12 +3,23 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aqa"
+name = "aqap"
 version = "1.0.0"
-description = "Agent Queue Agent Communication Protocol — 基于队列协议的 Agent 通信与质量保障系统"
+description = "Agent Queue Agent Communication Protocol — 基于消息队列的 Agent 质量保障平台"
 requires-python = ">=3.9"
+dependencies = [
+    "pyyaml>=6.0",
+    "redis>=5.0",
+    "cryptography>=40.0",
+]
 
 [project.optional-dependencies]
-redis = ["redis>=5.0"]
-kafka = ["aiokafka>=0.10.0"]
-test = ["pytest>=7.0", "pytest-asyncio>=0.21.0"]
+kafka = ["kafka-python>=2.0"]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.21", "pytest-cov>=4.0"]
+
+[project.urls]
+Homepage = "https://github.com/agent-quality-assurance/aqap"
+
+[tool.setuptools.packages.find]
+include = ["aqap", "aqap.*", "aqap.plugins.*"]
+namespaces = false

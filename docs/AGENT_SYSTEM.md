@@ -1,9 +1,9 @@
 # Agent 系统
 
-AQA 共有三种 Agent 类型 + 一个 Supervisor，全部实现在 `aqa/agent/` 目录下。
+AQA 共有三种 Agent 类型 + 一个 Supervisor，全部实现在 `aqap/agent/` 目录下。
 
 ```
-aqa/agent/
+aqap/agent/
 ├── base.py        # Agent 抽象基类 (311 行)
 ├── probe.py       # 检测 Agent (74 行)
 ├── judge.py       # 评判 Agent (88 行)
@@ -23,7 +23,7 @@ aqa/agent/
 Agent(
     agent_id: str,                    # Agent 唯一标识
     transport: Transport,             # 消息队列后端
-    group: str = "aqa-default",       # 消费者组名
+    group: str = "aqap-default",       # 消费者组名
     max_retries: int = 3,            # 消息重试上限
     heartbeat_interval: int = 30,    # 心跳间隔(秒)
     cipher: PayloadCipher | None = None,  # payload 加密
@@ -85,12 +85,12 @@ Agent(
 
 | 收到消息的 topic | 回复发往 |
 |---|---|
-| `aqa:agent:probe` | `aqa:agent:judge` |
-| `aqa:agent:judge` | `aqa:agent:reporter` |
-| `aqa:agent:reporter` | `aqa:broadcast` |
-| 其他 | `aqa:inbox:{message.source}` |
+| `aqap:agent:probe` | `aqap:agent:judge` |
+| `aqap:agent:judge` | `aqap:agent:reporter` |
+| `aqap:agent:reporter` | `aqap:broadcast` |
+| 其他 | `aqap:inbox:{message.source}` |
 
-如果 reply 的 `target` 非空，则强制路由到 `aqa:inbox:{reply.target}`。
+如果 reply 的 `target` 非空，则强制路由到 `aqap:inbox:{reply.target}`。
 
 ### 重试与死信 (`_handle_failure`)
 
@@ -111,7 +111,7 @@ handle_message 抛出异常
 ### 心跳 (`_heartbeat_loop`)
 
 - 每 `heartbeat_interval` 秒发一次 `HEARTBEAT`
-- 双通道：`aqa:broadcast` + `aqa:system:events`
+- 双通道：`aqap:broadcast` + `aqap:system:events`
 - Supervisor 通过心跳时间戳检测失联
 
 ### 插件执行 (`run_plugins`)
@@ -120,7 +120,7 @@ handle_message 抛出异常
 async def run_plugins(self, topic: str, context: dict) -> list[dict]:
 ```
 
-- 自动注入追踪上下文：`_aqa_start_time`, `_aqa_trace_id`, `_aqa_message_type`, `_aqa_source`
+- 自动注入追踪上下文：`_aqap_start_time`, `_aqap_trace_id`, `_aqap_message_type`, `_aqap_source`
 - 调用 `registry.execute_all(topic, ctx)` 执行绑定到该 topic 的所有插件
 
 ### 发送消息 (`send`)
@@ -166,11 +166,11 @@ TASK_DISPATCH
     │     │
     │     └─ run_plugins("probe", task)  →  调用绑定的验证/追踪插件
     │
-    ├─ task_result() → TASK_RESULT (发往 aqa:agent:judge)
+    ├─ task_result() → TASK_RESULT (发往 aqap:agent:judge)
     │
     └─ message.reply(JUDGE_REQUEST) → JUDGE_REQUEST
           │
-          └─ judge_msg.target = self._judge_target → aqa:inbox:{judge_target}
+          └─ judge_msg.target = self._judge_target → aqap:inbox:{judge_target}
 ```
 
 ---
@@ -202,7 +202,7 @@ JUDGE_REQUEST
     │
     └─ message.reply(REPORT_REQUEST) → REPORT_REQUEST
           │
-          └─ report_msg.target = self._reporter_target → aqa:inbox:{reporter_target}
+          └─ report_msg.target = self._reporter_target → aqap:inbox:{reporter_target}
 ```
 
 ---
@@ -222,7 +222,7 @@ REPORT_REQUEST
     │
     ├─ REPORT_DELIVER (定向回传 → target = message.source)
     │
-    └─ self.send(broadcast) → REPORT_DELIVER (广播到 aqa:broadcast)
+    └─ self.send(broadcast) → REPORT_DELIVER (广播到 aqap:broadcast)
 ```
 
 双向投递：定向回传给请求者 + 广播到全局通道。

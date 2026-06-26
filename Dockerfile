@@ -7,9 +7,9 @@ RUN pip install --no-cache-dir \
     redis>=5.0 \
     cryptography>=40.0
 
-COPY aqa/ ./aqa/
+COPY aqap/ ./aqap/
 COPY config.yaml ./config.yaml
 
 ENV PYTHONPATH=/app
 
-ENTRYPOINT ["python", "-m", "aqa"]
+ENTRYPOINT ["python", "-m", "aqap"]

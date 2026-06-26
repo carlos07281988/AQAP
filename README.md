@@ -45,7 +45,7 @@
   "message_id":     "a1b2c3d4e5f6g7h8",
   "source":         "cli-orchestrator",
   "target":         "",
-  "topic":          "aqa:agent:probe",
+  "topic":          "aqap:agent:probe",
   "trace_id":       "trace_dcf9a2b1",
   "correlation_id": "",
   "version":        "1.0",
@@ -90,17 +90,17 @@ Topic 是消息路由的唯一依据。Agent 不关心"发给谁", 只关心"投
 
 | Topic | 用途 | 消费者 |
 |---|---|---|
-| `aqa:broadcast` | 全局广播通道 (心跳 / 系统通知) | 所有 Agent |
-| `aqa:agent:probe` | 检测任务分发 | Probe Agent |
-| `aqa:agent:judge` | 评判裁决 | Judge Agent |
-| `aqa:agent:reporter` | 报告生成 | Reporter Agent |
-| `aqa:inbox:{agent_id}` | Agent 私有收件箱 (定向消息) | 指定 Agent |
-| `aqa:system:events` | 系统事件 (注册/下线) | 监控组件 |
+| `aqap:broadcast` | 全局广播通道 (心跳 / 系统通知) | 所有 Agent |
+| `aqap:agent:probe` | 检测任务分发 | Probe Agent |
+| `aqap:agent:judge` | 评判裁决 | Judge Agent |
+| `aqap:agent:reporter` | 报告生成 | Reporter Agent |
+| `aqap:inbox:{agent_id}` | Agent 私有收件箱 (定向消息) | 指定 Agent |
+| `aqap:system:events` | 系统事件 (注册/下线) | 监控组件 |
 
 ### Topic 命名规范
 
 ```
-aqa:{scope}:{name}
+aqap:{scope}:{name}
   │      │       └─ 具体名称, 小写字母 + 连字符
   │      └───────── 作用域 (agent / inbox / broadcast / system)
   └──────────────── 系统保留前缀
@@ -114,14 +114,14 @@ aqa:{scope}:{name}
 
 ```
 初始消息                     trace_id = "trace_a1b2"
-  TASK_DISPATCH ────────► aqa:agent:probe
+  TASK_DISPATCH ────────► aqap:agent:probe
                                │
                           trace_id 保持不变 ──── 透传
                                │
-  TASK_RESULT    ◄──────── aqa:agent:probe
+  TASK_RESULT    ◄──────── aqap:agent:probe
     trace_id = "trace_a1b2"
                                │
-  JUDGE_VERDICT  ◄──────── aqa:agent:judge
+  JUDGE_VERDICT  ◄──────── aqap:agent:judge
     trace_id = "trace_a1b2"
 ```
 
@@ -181,9 +181,9 @@ Scheduler/CLI                Probe Agent              Judge Agent            Rep
 > 只需要能连接队列, 会拼 JSON。
 
 SDK 实现见 `sdk/` 目录:
-- `aqa_sdk/message.py` — Python 端消息构造/解析
-- `aqa_sdk/consumer.py` — 自动 ACK 的消费循环
-- `aqa_sdk/bridge/` — HTTPBridge 实现
+- `aqap_sdk/message.py` — Python 端消息构造/解析
+- `aqap_sdk/consumer.py` — 自动 ACK 的消费循环
+- `aqap_sdk/bridge/` — HTTPBridge 实现
 - `examples/go_agent.go` — Go 语言外部 Agent 完整示例
 - `examples/js_agent.mjs` — JS/Node.js 外部 Agent 完整示例
 
@@ -202,7 +202,7 @@ PYTHONPATH=. ./venv/bin/python -m pytest tests/ sdk/tests/ -v
 
 # 3. 运行 InMemory Demo (无需 Redis)
 PYTHONPATH=. ./venv/bin/python examples/demo.py
-# 日志输出格式: [2026-06-27 10:30:00] [aqa.agent.probe] [INFO] ...
+# 日志输出格式: [2026-06-27 10:30:00] [aqap.agent.probe] [INFO] ...
 
 # 4. 调整日志级别 (修改 config.yaml)
 # logging:
@@ -233,7 +233,7 @@ AQA/
 │   ├── TESTING.md           # 测试策略
 │   └── CONFIG_REFERENCE.md  # 配置参考
 │
-├── aqa/                     # AQA 内核
+├── aqap/                     # AQA 内核
 │   ├── core/
 │   │   ├── message.py       # 消息协议实现 (遵循 PROTOCOL.md)
 │   │   ├── engine.py        # 配置驱动运行时引擎
@@ -261,14 +261,14 @@ AQA/
 │       └── trace_collector.py # 链路追踪插件
 │
 ├── sdk/                     # 外部 Agent SDK
-│   ├── aqa_sdk/             #   Python SDK (独立包)
+│   ├── aqap_sdk/             #   Python SDK (独立包)
 │   ├── README.md            #   协议文档 + 多语言示例
 │   └── examples/
 │       ├── go_agent.go      #   Go 外部 Agent 示例
 │       └── js_agent.mjs     #   JS 外部 Agent 示例
 │
 ├── tests/                   # 核心测试
-│   └── test_aqa.py          # 30 项测试
+│   └── test_aqap.py          # 30 项测试
 ├── examples/
 │   └── demo.py              # InMemory Demo
 ├── Dockerfile
@@ -319,6 +319,6 @@ Agent 处理消息时:
 
 修改协议时需要同步：
 1. `PROTOCOL.md` — 协议规范
-2. `aqa/core/message.py` — 消息实现
-3. `sdk/aqa_sdk/message.py` — SDK 消息实现
-4. `tests/test_aqa.py` 和 `sdk/tests/test_sdk.py` — 更新测试
+2. `aqap/core/message.py` — 消息实现
+3. `sdk/aqap_sdk/message.py` — SDK 消息实现
+4. `tests/test_aqap.py` 和 `sdk/tests/test_sdk.py` — 更新测试

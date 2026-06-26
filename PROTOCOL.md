@@ -31,7 +31,7 @@
   "message_id":     "a1b2c3d4e5f6g7h8",
   "source":         "orchestrator-1",
   "target":         "",
-  "topic":          "aqa:agent:probe",
+  "topic":          "aqap:agent:probe",
   "trace_id":       "trace_dcf9a2b1",
   "correlation_id": "",
   "version":        "1.0",
@@ -164,26 +164,26 @@ ERROR 消息的 payload 格式:
 
 | 前缀 | 保留用途 | 示例 |
 |---|---|---|
-| `aqa:agent:*` | 内置 Agent 通道 | `aqa:agent:probe` |
-| `aqa:system:*` | 系统级通道 | `aqa:system:events` |
-| `aqa:broadcast` | 全局广播 | — |
-| `aqa:inbox:*` | Agent 私有收件箱 | `aqa:inbox:probe-1` |
-| `aqa:plugin:*` | 插件事件 | `aqa:plugin:events` |
-| `aqa:dlq` | 死信队列 | — |
+| `aqap:agent:*` | 内置 Agent 通道 | `aqap:agent:probe` |
+| `aqap:system:*` | 系统级通道 | `aqap:system:events` |
+| `aqap:broadcast` | 全局广播 | — |
+| `aqap:inbox:*` | Agent 私有收件箱 | `aqap:inbox:probe-1` |
+| `aqap:plugin:*` | 插件事件 | `aqap:plugin:events` |
+| `aqap:dlq` | 死信队列 | — |
 | `<自定义>` | 外部 Agent 自定义 | `external:my-service:alerts` |
 
 ### 3.2 Topic 作用域
 
 | Topic | 创建者 | 消费者 | 保留 |
 |---|---|---|---|
-| `aqa:broadcast` | 任何 Agent | 所有 Agent | ✅ |
-| `aqa:system:events` | 系统 | 所有 Agent | ✅ |
-| `aqa:agent:probe` | Scheduler | Probe Agent | ✅ |
-| `aqa:agent:judge` | Probe Agent | Judge Agent | ✅ |
-| `aqa:agent:reporter` | Judge Agent | Reporter Agent | ✅ |
-| `aqa:inbox:{agent_id}` | 任何 Agent | 只有 `{agent_id}` 消费 | ✅ |
-| `aqa:plugin:events` | Plugin | 订阅的 Agent | ✅ |
-| `aqa:dlq` | 系统 (自动) | DLQ Consumer | ✅ |
+| `aqap:broadcast` | 任何 Agent | 所有 Agent | ✅ |
+| `aqap:system:events` | 系统 | 所有 Agent | ✅ |
+| `aqap:agent:probe` | Scheduler | Probe Agent | ✅ |
+| `aqap:agent:judge` | Probe Agent | Judge Agent | ✅ |
+| `aqap:agent:reporter` | Judge Agent | Reporter Agent | ✅ |
+| `aqap:inbox:{agent_id}` | 任何 Agent | 只有 `{agent_id}` 消费 | ✅ |
+| `aqap:plugin:events` | Plugin | 订阅的 Agent | ✅ |
+| `aqap:dlq` | 系统 (自动) | DLQ Consumer | ✅ |
 | 自定义 | 外部 Agent | 外部 Agent | ❌ |
 
 ### 3.3 路由规则
@@ -199,7 +199,7 @@ publish(topic, msg) → 所有订阅 topic 的消费者组收到消息
            广播给整个      inbox 路由:
            group 内所有    topic 不变,
            消费者          target={id} →
-                          aqa:inbox:{id}
+                          aqap:inbox:{id}
 ```
 
 ---
@@ -212,14 +212,14 @@ publish(topic, msg) → 所有订阅 topic 的消费者组收到消息
 
 ```
 入口消息生成 trace_id          trace_id = "trace_a1b2"
-    TASK_DISPATCH ──────────► aqa:agent:probe
+    TASK_DISPATCH ──────────► aqap:agent:probe
                                   │
                             透传 trace_id ←─── 不准重新生成
                                   │
-    TASK_RESULT     ◄──────── aqa:agent:probe
+    TASK_RESULT     ◄──────── aqap:agent:probe
     trace_id = "trace_a1b2"
                                   │
-    JUDGE_VERDICT   ◄──────── aqa:agent:judge
+    JUDGE_VERDICT   ◄──────── aqap:agent:judge
     trace_id = "trace_a1b2"
 ```
 
@@ -272,7 +272,7 @@ Agent B 回复  message_id="msg_002", correlation_id="msg_001"
 处理 payload 时发生业务异常：
 
 1. **不 ACK** — 消息重返 pending 队列
-2. 重试计数超过 `max_retries` 后，ACK 并转发到 `aqa:dlq` topic
+2. 重试计数超过 `max_retries` 后，ACK 并转发到 `aqap:dlq` topic
 
 ### 5.3 DLQ 消息格式
 
@@ -284,7 +284,7 @@ DLQ 消息是标准的 AQA 信封：
   "message_id":     "dlq_uuid",
   "source":         "system-dlq",
   "target":         "",
-  "topic":          "aqa:dlq",
+  "topic":          "aqap:dlq",
   "trace_id":       "原消息 trace_id",
   "correlation_id": "原消息 message_id",
   "version":        "1.0",
@@ -354,7 +354,7 @@ version = "MAJOR.MINOR"
 
 ### 7.3 Topic 级访问控制（规划中）
 
-- 禁止外部 Agent 向 `aqa:*` 系统 topic 发布消息
+- 禁止外部 Agent 向 `aqap:*` 系统 topic 发布消息
 - Agent `source` 和白名单 topic 绑定
 
 ---

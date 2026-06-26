@@ -27,7 +27,7 @@ security:
 # 插件注册
 plugins:
   validator:                      # 插件名称 (任意)
-    class: "aqa.plugins.validator.ValidatorPlugin"  # 全限定类名
+    class: "aqap.plugins.validator.ValidatorPlugin"  # 全限定类名
     enabled: true                 # 是否启用
     topic_bind:                   # 绑定到哪些阶段名
       - "probe"
@@ -39,7 +39,7 @@ plugins:
         - "plugin_results"
 
   scorer:
-    class: "aqa.plugins.scorer.ScorerPlugin"
+    class: "aqap.plugins.scorer.ScorerPlugin"
     enabled: true
     topic_bind:
       - "judge"
@@ -50,7 +50,7 @@ plugins:
         plugin_health: 0.2
 
   trace_collector:
-    class: "aqa.plugins.trace_collector.TraceCollector"
+    class: "aqap.plugins.trace_collector.TraceCollector"
     enabled: true
     topic_bind:
       - "probe"
@@ -64,33 +64,33 @@ agents:
   probe-1:
     type: "probe"                 # Agent 类型 (probe | judge | reporter)
     topics:                       # 订阅的消息 Topic
-      - "aqa:broadcast"
-      - "aqa:agent:probe"
+      - "aqap:broadcast"
+      - "aqap:agent:probe"
     max_retries: 3
     heartbeat_interval: 30
-    group: "aqa-probes"
+    group: "aqap-probes"
     targets:                      # 透传给 Agent 构造函数的关键字参数
       judge_target: "judge-1"
 
   judge-1:
     type: "judge"
     topics:
-      - "aqa:agent:judge"
-      - "aqa:inbox:judge-1"       # 必须有 inbox 订阅 (定向消息)
+      - "aqap:agent:judge"
+      - "aqap:inbox:judge-1"       # 必须有 inbox 订阅 (定向消息)
     max_retries: 3
     heartbeat_interval: 30
-    group: "aqa-judges"
+    group: "aqap-judges"
     targets:
       reporter_target: "reporter-1"
 
   reporter-1:
     type: "reporter"
     topics:
-      - "aqa:agent:reporter"
-      - "aqa:inbox:reporter-1"   # 必须有 inbox 订阅 (定向消息)
+      - "aqap:agent:reporter"
+      - "aqap:inbox:reporter-1"   # 必须有 inbox 订阅 (定向消息)
     max_retries: 3
     heartbeat_interval: 30
-    group: "aqa-reporters"
+    group: "aqap-reporters"
 
 # 监控配置
 supervisor:
@@ -134,7 +134,7 @@ supervisor:
 
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `class` | string | 必填 | 插件类的全限定名（如 `"aqa.plugins.validator.ValidatorPlugin"`） |
+| `class` | string | 必填 | 插件类的全限定名（如 `"aqap.plugins.validator.ValidatorPlugin"`） |
 | `enabled` | bool | `true` | 是否启用 |
 | `topic_bind` | list[string] | `[]` | 绑定到哪些阶段名（`probe`、`judge`、`reporter`） |
 | `config` | dict | `{}` | 插件自定义配置，通过 `initialize(config)` 传给插件 |
@@ -149,10 +149,10 @@ supervisor:
 | `topics` | list[string] | `[]` | 要订阅的消息 Topic |
 | `max_retries` | int | `3` | 消息处理重试上限 |
 | `heartbeat_interval` | int | `30` | 心跳间隔（秒） |
-| `group` | string | `"aqa-{type}s"` | 消费者组名 |
+| `group` | string | `"aqap-{type}s"` | 消费者组名 |
 | `targets` | dict | `{}` | 透传给 Agent 构造函数的 `**kwargs` |
 
-**关键约束**：`judge` 和 `reporter` 必须订阅自己的 `aqa:inbox:{agent_id}` 以接收定向消息。
+**关键约束**：`judge` 和 `reporter` 必须订阅自己的 `aqap:inbox:{agent_id}` 以接收定向消息。
 
 ### 2.6 `supervisor` — 生命周期
 

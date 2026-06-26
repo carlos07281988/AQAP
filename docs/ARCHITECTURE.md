@@ -111,17 +111,17 @@ Scheduler/CLI                Probe Agent              Judge Agent            Rep
 
 | 出发 Agent | 消息类型 | 目标 Topic |
 |---|---|---|
-| CLI/Scheduler | TASK_DISPATCH | `aqa:agent:probe` |
-| Probe Agent | TASK_RESULT | `aqa:agent:judge` |
-| Probe Agent | JUDGE_REQUEST | `aqa:inbox:judge-1` (定向) |
-| Judge Agent | JUDGE_VERDICT | `aqa:agent:reporter` |
-| Judge Agent | REPORT_REQUEST | `aqa:inbox:reporter-1` (定向) |
-| Reporter Agent | REPORT_DELIVER | `aqa:inbox:{source}` (定向回传) + `aqa:broadcast` |
+| CLI/Scheduler | TASK_DISPATCH | `aqap:agent:probe` |
+| Probe Agent | TASK_RESULT | `aqap:agent:judge` |
+| Probe Agent | JUDGE_REQUEST | `aqap:inbox:judge-1` (定向) |
+| Judge Agent | JUDGE_VERDICT | `aqap:agent:reporter` |
+| Judge Agent | REPORT_REQUEST | `aqap:inbox:reporter-1` (定向) |
+| Reporter Agent | REPORT_DELIVER | `aqap:inbox:{source}` (定向回传) + `aqap:broadcast` |
 
 ## 三、模块依赖关系
 
 ```
-aqa/
+aqap/
 ├── core/                      ← 内核层 (零依赖)
 │   ├── message.py             → 无 (仅标准库)
 │   ├── config.py              → 无 (仅标准库)
@@ -197,11 +197,11 @@ REPORT_DELIVER →  trace_id = "trace_x001"  ← 透传
 
 | 模块 | 文件数 | 行数 | 占比 |
 |---|---|---|---|
-| `aqa/core/` | 5 | 827 | 22% |
-| `aqa/agent/` | 5 | 692 | 18% |
-| `aqa/transport/` | 4 | 391 | 10% |
-| `aqa/plugin/` | 2 | 142 | 4% |
-| `aqa/plugins/` | 3 | 204 | 5% |
+| `aqap/core/` | 5 | 827 | 22% |
+| `aqap/agent/` | 5 | 692 | 18% |
+| `aqap/transport/` | 4 | 391 | 10% |
+| `aqap/plugin/` | 2 | 142 | 4% |
+| `aqap/plugins/` | 3 | 204 | 5% |
 | `sdk/` | 5 | 899 | 24% |
 | `tests/` | 2 | 613 | 16% |
 | 其他 | 3 | 130 | 3% |

@@ -1,5 +1,5 @@
 """
-AQA 演示 — 使用 InMemoryTransport 模拟完整检测流程
+AQAP 演示 — 使用 InMemoryTransport 模拟完整检测流程
 无需 Redis / Kafka, 纯内存验证架构
 """
 from __future__ import annotations
@@ -7,12 +7,12 @@ from __future__ import annotations
 import asyncio
 from typing import AsyncGenerator
 
-from aqa.core.message import Message, MessageType, Topic, task_dispatch, heartbeat
-from aqa.transport.inmemory import InMemoryTransport
+from aqap.core.message import Message, MessageType, Topic, task_dispatch, heartbeat
+from aqap.transport.inmemory import InMemoryTransport
 
 
 # ── 编写一个简单的自定义插件用于演示 ──
-from aqa.plugin.base import Plugin
+from aqap.plugin.base import Plugin
 
 
 class DemoCheckPlugin(Plugin):
@@ -40,15 +40,15 @@ class DemoCheckPlugin(Plugin):
         pass
 
 
-from aqa.plugin.registry import registry
-from aqa.agent.probe import ProbeAgent
-from aqa.agent.judge import JudgeAgent
-from aqa.agent.reporter import ReporterAgent
+from aqap.plugin.registry import registry
+from aqap.agent.probe import ProbeAgent
+from aqap.agent.judge import JudgeAgent
+from aqap.agent.reporter import ReporterAgent
 
 
 async def main():
     print("=" * 50)
-    print("AQA — Agent Quality Assurance Demo")
+    print("AQAP — Agent Quality Assurance Demo")
     print("Transport: InMemory (无需 Redis)")
     print("=" * 50)
 
@@ -66,7 +66,7 @@ async def main():
     reporter = ReporterAgent("reporter-1", transport)
 
     # 订阅 Topic
-    probe.subscribe_to("aqa:broadcast")
+    probe.subscribe_to("aqap:broadcast")
     probe.subscribe_to(Topic.AGENT_PROBE)
     judge.subscribe_to(Topic.AGENT_JUDGE)
     reporter.subscribe_to(Topic.AGENT_REPORTER)

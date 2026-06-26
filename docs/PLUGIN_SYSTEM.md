@@ -15,7 +15,7 @@
 
 ## 一、Plugin 基类
 
-定义在 `aqa/plugin/base.py` (43 行)：
+定义在 `aqap/plugin/base.py` (43 行)：
 
 ```python
 class Plugin(ABC):
@@ -69,12 +69,12 @@ class Plugin(ABC):
 
 ## 二、PluginRegistry
 
-定义在 `aqa/plugin/registry.py` (99 行)：
+定义在 `aqap/plugin/registry.py` (99 行)：
 
 ### 全局单例
 
 ```python
-from aqa.plugin.registry import registry
+from aqap.plugin.registry import registry
 
 # registry 是模块级全局单例
 registry = PluginRegistry()
@@ -117,15 +117,15 @@ execute_all(topic, context)
 
 ```python
 # 代码注册
-from aqa.plugin.registry import registry
-from aqa.plugins.validator import ValidatorPlugin
+from aqap.plugin.registry import registry
+from aqap.plugins.validator import ValidatorPlugin
 
 registry.register(ValidatorPlugin(), topics=["probe", "judge"])
 
 # 或通过 config.yaml
 # plugins:
 #   validator:
-#     class: "aqa.plugins.validator.ValidatorPlugin"
+#     class: "aqap.plugins.validator.ValidatorPlugin"
 #     enabled: true
 #     topic_bind: ["probe", "judge"]
 ```
@@ -140,7 +140,7 @@ Agent 调用 `run_plugins("probe", context)` 时，Registry 只执行绑定到 `
 
 ## 三、内置插件
 
-### 1. ValidatorPlugin (`aqa/plugins/validator.py`)
+### 1. ValidatorPlugin (`aqap/plugins/validator.py`)
 
 验证检测结果中必填字段是否存在。
 
@@ -158,7 +158,7 @@ class ValidatorPlugin(Plugin):
 - 返回缺失字段列表
 - `passed` = 无缺失字段
 
-### 2. ScorerPlugin (`aqa/plugins/scorer.py`)
+### 2. ScorerPlugin (`aqap/plugins/scorer.py`)
 
 加权评分插件。
 
@@ -179,7 +179,7 @@ class ScorerPlugin(Plugin):
 - 加权求和得到 `total_score`
 - 默认权重：pass_rate=0.5, field_completeness=0.3, plugin_health=0.2
 
-### 3. TraceCollector (`aqa/plugins/trace_collector.py`)
+### 3. TraceCollector (`aqap/plugins/trace_collector.py`)
 
 链路追踪数据收集器。
 
@@ -193,7 +193,7 @@ class TraceCollector(Plugin):
 ```
 
 **执行逻辑**：
-- 从 context 自动注入的 `_aqa_start_time`、`_aqa_trace_id` 等字段收集追踪数据
+- 从 context 自动注入的 `_aqap_start_time`、`_aqap_trace_id` 等字段收集追踪数据
 - 统计处理耗时、消息类型、来源 Agent
 - 达到 `report_interval` 条后输出统计报告
 
@@ -214,7 +214,7 @@ class DemoCheckPlugin(Plugin):
 ### 最小示例
 
 ```python
-from aqa.plugin.base import Plugin
+from aqap.plugin.base import Plugin
 
 class MyPlugin(Plugin):
     @property
@@ -245,7 +245,7 @@ class MyPlugin(Plugin):
 **方式一：代码注册**
 
 ```python
-from aqa.plugin.registry import registry
+from aqap.plugin.registry import registry
 
 registry.register(MyPlugin(), topics=["probe"])
 ```
@@ -269,7 +269,7 @@ Agent 调用 `run_plugins()` 时自动注入以下字段：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `_aqa_start_time` | float | 消息处理开始时间戳 |
-| `_aqa_trace_id` | str | 当前消息的 trace_id |
-| `_aqa_message_type` | str | 当前消息的类型 |
-| `_aqa_source` | str | 当前消息的 source |
+| `_aqap_start_time` | float | 消息处理开始时间戳 |
+| `_aqap_trace_id` | str | 当前消息的 trace_id |
+| `_aqap_message_type` | str | 当前消息的类型 |
+| `_aqap_source` | str | 当前消息的 source |

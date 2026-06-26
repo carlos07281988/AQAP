@@ -1,13 +1,15 @@
 """
-AQA 测试 — 核心协议 + Transport + 插件 + Agent + DLQ + 安全 + 链路追踪
+AQAP 测试 — 核心协议 + Transport + 插件 + Agent + DLQ + 安全 + 链路追踪
 """
 from __future__ import annotations
 
 import asyncio
-import time
 import pytest
+from typing import AsyncGenerator
 
-from aqa.core.message import (
+from aqap.transport.base import Transport
+
+from aqap.core.message import (
     Message,
     MessageType,
     Topic,
@@ -18,9 +20,9 @@ from aqa.core.message import (
     judge_verdict,
     heartbeat,
 )
-from aqa.core.dlq import DLQ_TOPIC
-from aqa.plugin.base import Plugin
-from aqa.plugin.registry import registry
+from aqap.core.dlq import DLQ_TOPIC
+from aqap.plugin.base import Plugin
+from aqap.plugin.registry import registry
 
 
 class TestMessageProtocol:
@@ -57,7 +59,7 @@ class TestMessageProtocol:
 
     def test_agent_inbox_topic(self):
         inbox = Topic.agent_inbox("probe-1")
-        assert inbox == "aqa:inbox:probe-1"
+        assert inbox == "aqap:inbox:probe-1"
 
 
 class TestPluginRegistry:
@@ -151,14 +153,6 @@ class _SimplePlugin(Plugin):
     async def execute(self, context: dict) -> dict:
         return {"passed": True, "value": context.get("x", 0) * 2}
 
-    async def cleanup(self) -> None:
-        pass
-
-
-from aqa.transport.base import Transport
-from typing import AsyncGenerator
-
-
 class _TestTransport(Transport):
     """测试用 Transport — 简化版 InMemory"""
 
@@ -200,10 +194,10 @@ class _TestTransport(Transport):
     async def ack(self, topic, msg_id=None): pass
 
 
-from aqa.agent.probe import ProbeAgent
-from aqa.agent.judge import JudgeAgent
-from aqa.agent.reporter import ReporterAgent
-from aqa.agent.base import Agent
+from aqap.agent.probe import ProbeAgent
+from aqap.agent.judge import JudgeAgent
+from aqap.agent.reporter import ReporterAgent
+from aqap.agent.base import Agent
 
 
 class _FailingProbeAgent(Agent):
@@ -230,11 +224,11 @@ class TestAgentIntegration:
     async def test_agent_send_receive(self):
         transport = _TestTransport()
         probe = ProbeAgent("probe-test", transport)
-        probe.subscribe_to("aqa:broadcast")
+        probe.subscribe_to("aqap:broadcast")
         await probe.start()
         await asyncio.sleep(0.05)  # 等 consume loop 启动
         await transport.publish(
-            "aqa:broadcast",
+            "aqap:broadcast",
             task_dispatch("cli", {"task_id": "t-001"}),
         )
         await asyncio.sleep(0.3)
@@ -284,7 +278,7 @@ class TestDLQ:
     """死信队列测试"""
 
     def test_dlq_record(self):
-        from aqa.core.dlq import create_dlq_message, DeadLetterRecord
+        from aqap.core.dlq import create_dlq_message, DeadLetterRecord
 
         record = create_dlq_message(
             original={"type": "TASK", "source": "test"},
@@ -301,7 +295,7 @@ class TestDLQ:
         assert record.original_message["source"] == "test"
 
     def test_dlq_serialize(self):
-        from aqa.core.dlq import create_dlq_message
+        from aqap.core.dlq import create_dlq_message
 
         record = create_dlq_message(
             original={"type": "TASK"},
@@ -319,7 +313,7 @@ class TestSecurity:
     """Payload 加密测试"""
 
     def test_encrypt_decrypt(self):
-        from aqa.core.security import PayloadCipher
+        from aqap.core.security import PayloadCipher
 
         cipher = PayloadCipher("test-secret-key-12345")
         assert cipher.enabled is True
@@ -334,7 +328,7 @@ class TestSecurity:
         assert decrypted["data"] == "sensitive"
 
     def test_noop_when_disabled(self):
-        from aqa.core.security import PayloadCipher
+        from aqap.core.security import PayloadCipher
 
         cipher = PayloadCipher()
         assert cipher.enabled is False
@@ -344,7 +338,7 @@ class TestSecurity:
         assert cipher.decrypt_payload(payload) is payload
 
     def test_unencrypted_passthrough(self):
-        from aqa.core.security import PayloadCipher
+        from aqap.core.security import PayloadCipher
 
         cipher = PayloadCipher("test-secret")
         assert cipher.decrypt_payload({"task_id": "plain"}) == {"task_id": "plain"}
@@ -362,8 +356,8 @@ class TestCrossLayerConsistency:
 
     def test_validate_message_sync(self):
         """核心和 SDK 的 validate_message 必须输出一致"""
-        from aqa.core.message import validate_message as core_validate
-        from aqa_sdk.message import validate_message as sdk_validate
+        from aqap.core.message import validate_message as core_validate
+        from aqap_sdk.message import validate_message as sdk_validate
 
         test_cases = [
             {"type": "TASK_DISPATCH", "source": "tester",
@@ -401,17 +395,17 @@ class TestTraceCollector:
 
     @pytest.mark.asyncio
     async def test_trace_record(self):
-        from aqa.plugins.trace_collector import TraceCollector
+        from aqap.plugins.trace_collector import TraceCollector
 
         plugin = TraceCollector()
         registry.register(plugin, topics=["probe"])
         await registry.initialize_all({})
 
         ctx = {
-            "_aqa_start_time": 1000.0,
-            "_aqa_trace_id": "trace-abc",
-            "_aqa_message_type": "TASK_DISPATCH",
-            "_aqa_source": "cli",
+            "_aqap_start_time": 1000.0,
+            "_aqap_trace_id": "trace-abc",
+            "_aqap_message_type": "TASK_DISPATCH",
+            "_aqap_source": "cli",
         }
         results = await registry.execute_all("probe", ctx)
         assert len(results) == 1
@@ -419,13 +413,13 @@ class TestTraceCollector:
 
     @pytest.mark.asyncio
     async def test_trace_no_start_time(self):
-        from aqa.plugins.trace_collector import TraceCollector
+        from aqap.plugins.trace_collector import TraceCollector
 
         plugin = TraceCollector()
         registry.register(plugin, topics=["probe"])
         await registry.initialize_all({})
 
-        ctx = {"_aqa_trace_id": "trace-xyz"}
+        ctx = {"_aqap_trace_id": "trace-xyz"}
         results = await registry.execute_all("probe", ctx)
         assert len(results) == 1
         assert results[0]["error"] is None
@@ -523,12 +517,12 @@ class TestSupervisor:
 
     @pytest.mark.asyncio
     async def test_register_and_start_stop(self):
-        from aqa.agent.supervisor import AgentSupervisor
+        from aqap.agent.supervisor import AgentSupervisor
 
         sup = AgentSupervisor(heartbeat_timeout=5)
         transport = _TestTransport()
         probe = ProbeAgent("sup-test", transport)
-        probe.subscribe_to("aqa:broadcast")
+        probe.subscribe_to("aqap:broadcast")
         sup.register(probe)
 
         assert "sup-test" in sup._agents
@@ -542,7 +536,7 @@ class TestSupervisor:
 
     @pytest.mark.asyncio
     async def test_heartbeat_tracking(self):
-        from aqa.agent.supervisor import AgentSupervisor
+        from aqap.agent.supervisor import AgentSupervisor
 
         sup = AgentSupervisor(heartbeat_timeout=30)
         sup.record_heartbeat("agent-1")

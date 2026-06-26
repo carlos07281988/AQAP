@@ -1,7 +1,7 @@
 /**
- * AQA SDK — JavaScript/Node.js 外部 Agent 接入示例
+ * AQAP SDK — JavaScript/Node.js 外部 Agent 接入示例
  *
- * 仅需 redis (node-redis), 不依赖 AQA Python 包。
+ * 仅需 redis (node-redis), 不依赖 AQAP Python 包。
  * 直接读写 Redis Stream, 遵守 JSON 信封协议即可。
  *
  * 运行: node examples/js_agent.mjs
@@ -25,7 +25,7 @@ const REDIS_URL = "redis://127.0.0.1:***@ {message_id}
             message_id: randomId(),
             source: "js-validator",
             target: msg.source,
-            topic: "aqa:agent:judge",
+            topic: "aqap:agent:judge",
             trace_id: msg.trace_id,
             correlation_id: msg.message_id,
             version: "1.0",
@@ -34,7 +34,7 @@ const REDIS_URL = "redis://127.0.0.1:***@ {message_id}
         };
 
         const replyId = await publisher.xAdd(
-            "aqa:agent:judge",
+            "aqap:agent:judge",
             "*",
             { json: JSON.stringify(reply) },
             { TRIM: { strategy: "MAXLEN", threshold: 10000, strategyModifier: "~" } }
@@ -47,7 +47,7 @@ const REDIS_URL = "redis://127.0.0.1:***@ {message_id}
 
 // 创建消费者组 (首次需要)
 try {
-    await subscriber.xGroupCreate("aqa:agent:probe", "js-group", "$", {
+    await subscriber.xGroupCreate("aqap:agent:probe", "js-group", "$", {
         MKSTREAM: true,
     });
 } catch (e) {
@@ -60,7 +60,7 @@ while (true) {
     const results = await subscriber.xReadGroup(
         "js-group",
         "js-worker-1",
-        { "aqa:agent:probe": ">" },
+        { "aqap:agent:probe": ">" },
         { COUNT: 1, BLOCK: 5000 }
     );
 

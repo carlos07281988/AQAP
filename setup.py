@@ -1,9 +1,24 @@
-from setuptools import find_packages, setup
+from setuptools import setup
 
 setup(
-    name="aqa",
+    name="aqap",
     version="1.0.0",
-    description="Agent Queue Agent Communication Protocol — 队列式 Agent 通信与质量保障系统",
-    packages=find_packages(),
+    packages=[
+        "aqap",
+        "aqap.core",
+        "aqap.agent",
+        "aqap.plugin",
+        "aqap.plugins",
+        "aqap.transport",
+    ],
+    install_requires=[
+        "pyyaml>=6.0",
+        "redis>=5.0",
+        "cryptography>=40.0",
+    ],
+    extras_require={
+        "kafka": ["kafka-python>=2.0"],
+        "dev": ["pytest>=7.0", "pytest-asyncio>=0.21", "pytest-cov>=4.0"],
+    },
     python_requires=">=3.9",
 )

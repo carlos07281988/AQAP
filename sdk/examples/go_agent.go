@@ -1,6 +1,6 @@
-// AQA Go Agent — 外部 Agent 接入示例
+// AQAP Go Agent — 外部 Agent 接入示例
 //
-// 仅需 go-redis, 不依赖任何 AQA Python 代码。
+// 仅需 go-redis, 不依赖任何 AQAP Python 代码。
 // 直接读写 Redis Stream, 遵守 JSON 信封协议。
 //
 // 运行: go run examples/go_agent.go
@@ -16,7 +16,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// AQAMessage 是 AQA 消息信封 — 与 Python SDK 完全一致的 JSON 结构
+// AQAMessage 是 AQAP 消息信封 — 与 Python SDK 完全一致的 JSON 结构
 type AQAMessage struct {
 	Type          string         `json:"type"`
 	MessageID     string         `json:"message_id"`
@@ -40,9 +40,9 @@ func randomID() string {
 }
 
 const (
-	TopicProbe   = "aqa:agent:probe"
-	TopicJudge   = "aqa:agent:judge"
-	TopicReporter = "aqa:agent:reporter"
+	TopicProbe   = "aqap:agent:probe"
+	TopicJudge   = "aqap:agent:judge"
+	TopicReporter = "aqap:agent:reporter"
 )
 
 func main() {

@@ -1,41 +1,21 @@
-# AQA — Agent Quality Assurance
-#
-# 一键启动: docker compose up
-# 后台运行: docker compose up -d
-# 查看日志: docker compose logs -f
+# AQAP — Agent Quality Assurance
+version: "3.8"
 
 services:
   redis:
     image: redis:7-alpine
-    container_name: aqa-redis
     ports:
       - "6379:6379"
-    volumes:
-      - redis-data:/data
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
+    container_name: aqap-redis
 
-  aqa-engine:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: aqa-engine
+  engine:
+    build: .
+    container_name: aqap-engine
     depends_on:
-      redis:
-        condition: service_healthy
+      - redis
     environment:
-      - REDIS_URL=redis://redis:6379
-      - AQA_CONFIG=/app/config.yaml
-      - PYTHONPATH=/app
+      - AQAP_CONFIG=/app/config.yaml
     volumes:
+      - ./aqap:/app/aqap
       - ./config.yaml:/app/config.yaml
-      - ./aqa:/app/aqa
-    command: ["python", "-m", "aqa.core.engine"]
-    restart: unless-stopped
-
-volumes:
-  redis-data:
+    command: ["python", "-m", "aqap.core.engine"]

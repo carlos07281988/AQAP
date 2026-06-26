@@ -18,7 +18,7 @@ export PYTHONPATH=/path/to/AQA/sdk:$PYTHONPATH
 ```
 
 ```python
-from aqa_sdk import AQAMessage, MessageType, StreamProducer, Consumer
+from aqap_sdk import AQAMessage, MessageType, StreamProducer, Consumer
 
 async def handler(msg: AQAMessage):
     print(f"收到任务: {msg.payload}")
@@ -26,7 +26,7 @@ async def handler(msg: AQAMessage):
     async with StreamProducer("redis://...") as p:
         await p.publish(result)
 
-c = Consumer("redis://...", "aqa:agent:probe", handler)
+c = Consumer("redis://...", "aqap:agent:probe", handler)
 await c.start()
 ```
 
@@ -40,10 +40,10 @@ rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379"})
 result := AQAMessage{
     Type:    "TASK_RESULT",
     Source:  "go-inspector",
-    Topic:   "aqa:agent:judge",
+    Topic:   "aqap:agent:judge",
     Payload: map[string]any{"passed": true, "score": 0.97},
 }
-rdb.XAdd(ctx, &redis.XAddArgs{Stream: "aqa:agent:judge", Values: map[string]any{"json": result.ToJSON()}})
+rdb.XAdd(ctx, &redis.XAddArgs{Stream: "aqap:agent:judge", Values: map[string]any{"json": result.ToJSON()}})
 ```
 
 完整示例: `examples/go_agent.go`
@@ -58,7 +58,7 @@ const sub = createClient({ url: REDIS_URL });
 const msg = JSON.parse(raw.json);
 // ... 处理 ...
 const reply = { type: 'TASK_RESULT', source: 'js-validator', ... };
-publisher.xAdd('aqa:agent:judge', '*', { json: JSON.stringify(reply) });
+publisher.xAdd('aqap:agent:judge', '*', { json: JSON.stringify(reply) });
 ```
 
 完整示例: `examples/js_agent.mjs`
@@ -79,7 +79,7 @@ publisher.xAdd('aqa:agent:judge', '*', { json: JSON.stringify(reply) });
   "message_id":     "a1b2c3d4e5f6g7h8",
   "source":         "cli-orchestrator",
   "target":         "",
-  "topic":          "aqa:agent:probe",
+  "topic":          "aqap:agent:probe",
   "trace_id":       "trace_uuid",
   "correlation_id": "",
   "version":        "1.0",
@@ -107,12 +107,12 @@ publisher.xAdd('aqa:agent:judge', '*', { json: JSON.stringify(reply) });
 
 | 类型 | 语义 | 典型 topic | 示例 payload |
 |---|---|---|---|
-| `HEARTBEAT` | 心跳 | `aqa:broadcast` | `{"cpu": 0.3, "mem": 512}` |
-| `TASK_DISPATCH` | 下发检测任务 | `aqa:agent:probe` | `{"task_id": "...", "target": "svc-a"}` |
-| `TASK_RESULT` | 检测结果 | `aqa:agent:judge` | `{"task_id": "...", "passed": true, "score": 0.95}` |
-| `JUDGE_REQUEST` | 请求评判 | `aqa:agent:judge` | `{"task_id": "...", "evidences": [...]}` |
-| `JUDGE_VERDICT` | 评判裁决 | `aqa:agent:reporter` | `{"task_id": "...", "verdict": "PASS", "score": 92}` |
-| `REPORT_REQUEST` | 请求报告 | `aqa:agent:reporter` | `{"task_id": "...", "format": "html"}` |
+| `HEARTBEAT` | 心跳 | `aqap:broadcast` | `{"cpu": 0.3, "mem": 512}` |
+| `TASK_DISPATCH` | 下发检测任务 | `aqap:agent:probe` | `{"task_id": "...", "target": "svc-a"}` |
+| `TASK_RESULT` | 检测结果 | `aqap:agent:judge` | `{"task_id": "...", "passed": true, "score": 0.95}` |
+| `JUDGE_REQUEST` | 请求评判 | `aqap:agent:judge` | `{"task_id": "...", "evidences": [...]}` |
+| `JUDGE_VERDICT` | 评判裁决 | `aqap:agent:reporter` | `{"task_id": "...", "verdict": "PASS", "score": 92}` |
+| `REPORT_REQUEST` | 请求报告 | `aqap:agent:reporter` | `{"task_id": "...", "format": "html"}` |
 | `REPORT` | 报告结果 | 任意 | `{"report_url": "...", "summary": "..."}` |
 | `ERROR` | 系统错误 | 任意 | `{"code": "TIMEOUT", "message": "..."}` |
 
@@ -120,22 +120,22 @@ publisher.xAdd('aqa:agent:judge', '*', { json: JSON.stringify(reply) });
 
 | Topic | 用途 |
 |---|---|
-| `aqa:broadcast` | 全局广播 (心跳/系统消息) |
-| `aqa:agent:probe` | 检测任务分发 |
-| `aqa:agent:judge` | 评判裁决 |
-| `aqa:agent:reporter` | 报告生成 |
-| `aqa:inbox:{agent_id}` | Agent 私有收件箱 |
+| `aqap:broadcast` | 全局广播 (心跳/系统消息) |
+| `aqap:agent:probe` | 检测任务分发 |
+| `aqap:agent:judge` | 评判裁决 |
+| `aqap:agent:reporter` | 报告生成 |
+| `aqap:inbox:{agent_id}` | Agent 私有收件箱 |
 
 ### 数据流
 
 ```
-TASK_DISPATCH ──> aqa:agent:probe ──> TASK_RESULT ──> aqa:agent:judge ──> JUDGE_VERDICT ──> aqa:agent:reporter ──> REPORT
+TASK_DISPATCH ──> aqap:agent:probe ──> TASK_RESULT ──> aqap:agent:judge ──> JUDGE_VERDICT ──> aqap:agent:reporter ──> REPORT
 ```
 
 外部 Agent 可以切入**任意阶段**:
-- 替换 Probe: 订阅 `aqa:agent:probe`, 发布到 `aqa:agent:judge`
-- 替换 Judge: 订阅 `aqa:agent:judge`, 发布到 `aqa:agent:reporter`
-- 补充检测: 订阅 `aqa:agent:probe`, 也发布到 `aqa:agent:judge` (多个消费者)
+- 替换 Probe: 订阅 `aqap:agent:probe`, 发布到 `aqap:agent:judge`
+- 替换 Judge: 订阅 `aqap:agent:judge`, 发布到 `aqap:agent:reporter`
+- 补充检测: 订阅 `aqap:agent:probe`, 也发布到 `aqap:agent:judge` (多个消费者)
 
 ---
 
@@ -145,7 +145,7 @@ TASK_DISPATCH ──> aqa:agent:probe ──> TASK_RESULT ──> aqa:agent:judg
                          AQA Queue Bus (Redis Streams)
          ┌──────────────────────┼──────────────────────┐
          │                      │                      │
-   aqa:agent:probe      aqa:agent:judge       aqa:agent:reporter
+   aqap:agent:probe      aqap:agent:judge       aqap:agent:reporter
          │                      │                      │
     ┌────┴────┐          ┌─────┴─────┐          ┌─────┴─────┐
     │ Probe   │          │  Judge    │          │  Reporter │

@@ -7,7 +7,7 @@ AQA 共 **37 项测试**，分布在两个目录：
 ```
 tests/
 ├── conftest.py          # pytest-asyncio 配置
-└── test_aqa.py          # 核心测试 (450 行, ~30 项)
+└── test_aqap.py          # 核心测试 (450 行, ~30 项)
 sdk/tests/
 ├── conftest.py          # SDK 测试配置
 └── test_sdk.py          # SDK 测试 (163 行, ~7 项)
@@ -31,7 +31,7 @@ PYTHONPATH=. ./venv/bin/python -m pytest sdk/tests/ -v
 PYTHONPATH=. ./venv/bin/python -m pytest tests/ sdk/tests/ -v --cov=aqa
 
 # 指定测试方法
-PYTHONPATH=. ./venv/bin/python -m pytest tests/test_aqa.py::TestAgentLifecycle -v
+PYTHONPATH=. ./venv/bin/python -m pytest tests/test_aqap.py::TestAgentLifecycle -v
 ```
 
 ## 三、测试分类
@@ -121,7 +121,7 @@ PYTHONPATH=. ./venv/bin/python -m pytest tests/test_aqa.py::TestAgentLifecycle -
 
 ### InMemoryTransport
 
-所有测试使用 `InMemoryTransport`（`aqa/transport/inmemory.py`），纯异步队列模拟。
+所有测试使用 `InMemoryTransport`（`aqap/transport/inmemory.py`），纯异步队列模拟。
 
 ```python
 transport = InMemoryTransport()
@@ -146,7 +146,7 @@ await probe.stop()
 
 ## 五、添加测试指南
 
-1. **测试文件**：核心测试在 `tests/test_aqa.py`，SDK 测试在 `sdk/tests/test_sdk.py`
+1. **测试文件**：核心测试在 `tests/test_aqap.py`，SDK 测试在 `sdk/tests/test_sdk.py`
 2. **测试类**：按功能分组（`TestMessageProtocol`、`TestAgentCommunication` 等）
 3. **测试方法**：以 `test_` 开头，描述性命名
 4. **pytest-asyncio**：所有异步测试自动通过 conftest 的 `event_loop_policy` 配置支持

@@ -1,4 +1,4 @@
-# AQA 系统配置 — 完整版
+# AQAP 系统配置 — 完整版
 # 全部可配: Transport / Agent / 插件 / 安全 / 死信 / 监控 / 日志
 
 app:
@@ -12,8 +12,8 @@ logging:
   format: "detailed"      # standard | detailed (含文件:行号)
   # 按模块覆盖日志级别
   loggers:
-    aqa.transport.redis_streams: "DEBUG"
-    aqa.transport.kafka: "WARNING"
+    aqap.transport.redis_streams: "DEBUG"
+    aqap.transport.kafka: "WARNING"
 
 # ── 消息队列后端 ──
 # backend: redis-streams | kafka | in-memory
@@ -26,39 +26,39 @@ transport:
 # 启用后 payload 在队列中加密传输, Agent 自动加解密
 security:
   enabled: false    # 首次使用: pip install cryptography, 再设为 true
-  secret: ""        # 用 aqa-sdk generate-secret 生成, 所有 Agent 共享此密钥
+  secret: ""        # 用 aqap-sdk generate-secret 生成, 所有 Agent 共享此密钥
 
 # ── Agent 配置 ──
 agents:
   probe-1:
     type: probe
-    group: aqa-probes
+    group: aqap-probes
     max_retries: 3          # 消息重试次数, 超过后进 DLQ
     heartbeat_interval: 30  # 心跳间隔 (秒)
     topics:
-      - "aqa:broadcast"
-      - "aqa:agent:probe"
+      - "aqap:broadcast"
+      - "aqap:agent:probe"
 
   judge-1:
     type: judge
-    group: aqa-judges
+    group: aqap-judges
     max_retries: 3
     heartbeat_interval: 30
     topics:
-      - "aqa:agent:judge"
+      - "aqap:agent:judge"
 
   reporter-1:
     type: reporter
-    group: aqa-reporters
+    group: aqap-reporters
     max_retries: 2
     heartbeat_interval: 30
     topics:
-      - "aqa:agent:reporter"
+      - "aqap:agent:reporter"
 
 # ── 插件注册 ──
 plugins:
   validator:
-    class: "aqa.plugins.validator.ValidatorPlugin"
+    class: "aqap.plugins.validator.ValidatorPlugin"
     enabled: true
     topic_bind:
       - "probe"
@@ -70,7 +70,7 @@ plugins:
         - plugin_results
 
   scorer:
-    class: "aqa.plugins.scorer.ScorerPlugin"
+    class: "aqap.plugins.scorer.ScorerPlugin"
     enabled: true
     topic_bind:
       - "judge"
@@ -81,7 +81,7 @@ plugins:
         plugin_health: 0.2
 
   trace-collector:
-    class: "aqa.plugins.trace_collector.TraceCollector"
+    class: "aqap.plugins.trace_collector.TraceCollector"
     enabled: true
     topic_bind:
       - "probe"

@@ -1,4 +1,4 @@
-# AQA — Agent Quality Assurance
+# AQAP — Agent Quality Assurance
 # 核心依赖最小集, 按需安装队列后端
 
 # ── 核心 ──

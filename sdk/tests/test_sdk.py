@@ -6,8 +6,8 @@ from __future__ import annotations
 import json
 import pytest
 
-from aqa_sdk.message import (
-    AQAMessage,
+from aqap_sdk.message import (
+    AQAPMessage,
     MessageType,
     Topic,
     validate_message,
@@ -18,7 +18,7 @@ class TestMessageProtocol:
     """消息信封协议测试"""
 
     def test_create_dispatch(self):
-        msg = AQAMessage.task_dispatch(
+        msg = AQAPMessage.task_dispatch(
             source="test-cli",
             payload={"task_id": "t-001", "target": "svc-a"},
         )
@@ -31,11 +31,11 @@ class TestMessageProtocol:
         assert msg.version == "1.0"
 
     def test_json_roundtrip(self):
-        original = AQAMessage.task_dispatch(
+        original = AQAPMessage.task_dispatch(
             source="tester", payload={"key": "value"}
         )
         raw = original.to_json()
-        decoded = AQAMessage.from_json(raw)
+        decoded = AQAPMessage.from_json(raw)
         assert decoded.type == original.type
         assert decoded.source == original.source
         assert decoded.trace_id == original.trace_id
@@ -44,7 +44,7 @@ class TestMessageProtocol:
 
     def test_reply(self):
         # 广播消息 (target=""): reply 的 source 回退到 incoming.source
-        incoming = AQAMessage.task_dispatch(
+        incoming = AQAPMessage.task_dispatch(
             source="req-agent", payload={"task_id": "42"}
         )
         assert incoming.target == ""  # 广播
@@ -60,12 +60,12 @@ class TestMessageProtocol:
 
     def test_reply_targeted(self):
         # 定向消息 (target!==""): reply 的 source 用 original target
-        incoming = AQAMessage(
+        incoming = AQAPMessage(
             type=MessageType.TASK_DISPATCH,
             source="orch",
             target="probe-1",
             payload={},
-            topic="aqa:inbox:probe-1",
+            topic="aqap:inbox:probe-1",
         )
         reply = incoming.reply(
             MessageType.TASK_RESULT,
@@ -75,13 +75,13 @@ class TestMessageProtocol:
         assert reply.target == "orch"
 
     def test_heartbeat(self):
-        msg = AQAMessage.heartbeat("worker-1", {"cpu": 0.3, "mem": 512})
+        msg = AQAPMessage.heartbeat("worker-1", {"cpu": 0.3, "mem": 512})
         assert msg.type == MessageType.HEARTBEAT
         assert msg.payload["cpu"] == 0.3
 
     def test_topic_inbox(self):
         inbox = Topic.inbox("agent-007")
-        assert inbox == "aqa:inbox:agent-007"
+        assert inbox == "aqap:inbox:agent-007"
 
     def test_validate_valid(self):
         data = {
@@ -89,7 +89,7 @@ class TestMessageProtocol:
             "message_id": "abc",
             "source": "tester",
             "target": "",
-            "topic": "aqa:agent:probe",
+            "topic": "aqap:agent:probe",
             "trace_id": "trace-1",
             "correlation_id": "",
             "version": "1.0",
@@ -124,7 +124,7 @@ class TestMessageProtocol:
         assert len(version_errors) == 1
 
     def test_from_dict_topic_default(self):
-        msg = AQAMessage.from_dict({
+        msg = AQAPMessage.from_dict({
             "type": "HEARTBEAT",
             "source": "x",
             "payload": {},
@@ -133,10 +133,10 @@ class TestMessageProtocol:
         assert msg.type == MessageType.HEARTBEAT
         assert msg.topic == ""  # 默认空
 
-    def test_aqa_compatibility(self):
-        """验证 SDK 消息格式与 aqa.core.message 兼容"""
+    def test_aqap_compatibility(self):
+        """验证 SDK 消息格式与 aqap.core.message 兼容"""
         # SDK 格式
-        sdk_msg = AQAMessage.task_dispatch("cli", {"id": "1"})
+        sdk_msg = AQAPMessage.task_dispatch("cli", {"id": "1"})
         sdk_dict = sdk_msg.to_dict()
 
         # 验证字段名一致

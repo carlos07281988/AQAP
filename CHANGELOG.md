@@ -198,3 +198,33 @@
 - `PROTOCOL.md` — 通信协议规范
 - `README.md` — 项目文档
 - Dockerfile, docker-compose.yml
+
+## 2026-06-29 — P0/P1/P2 全面修复
+
+### P0 修复
+- **`aqap/agent/base.py`** — 修复 Supervisor 心跳监控: Agent 构造函数新增 `supervisor` 参数, `_heartbeat_loop` 中调用 `supervisor.record_heartbeat()` 记录心跳时间戳, 使心跳超时自动重启机制正常运作
+- **`aqap/agent/dlq_consumer.py`** — 新增 DLQConsumerAgent: 消费 `aqap:dlq` topic, 记录结构化死信日志, 维护死信索引, 支持按 message_id/trace_id 重放, 定期清理过期死信
+- **`aqap/core/security.py`** — 重写: Fernet (AES-128-CBC) → AES-256-GCM 认证加密, 加密后格式 `{_encrypted, _ciphertext, _nonce}` 符合 PROTOCOL.md §7.2
+- **`LICENSE`** — 新增 MIT 许可证
+- **`pyproject.toml`** — 修复 Kafka 错误依赖: `kafka-python` → `aiokafka`
+- **`docker-compose.yml`** — 修复 command 路径, 新增 healthcheck
+- **`.github/workflows/ci.yml`** — 新增 CI: multi-Python (3.9-3.12), ruff lint, pytest, SDK 独立测试
+- **`aqap/core/message.py`** — ErrorCode 枚举新增 `AUTH_FAILURE`, `FORBIDDEN`
+- **`sdk/aqap_sdk/message.py`** — 同步新增 ErrorCode, 使用共享已知类型集合
+- **`aqap/core/engine.py`** — `_init_agents()` 将 Supervisor 透传给 Agent
+
+### P1 增强
+- **`aqap/admin.py`** — 新增 FastAPI Admin API: `/health`, `/agents`, `/dlq/stats`, `/dlq/replay`, `/traces/{id}`, `/topics`, `/config`
+- **`aqap/plugins/trace_collector.py`** — `_flush()` 实现 JSON Lines 文件导出, 新增 `query_trace()`, `query_recent()`, `stats()` 方法, 内存索引
+- **`aqap/core/validate.py`** — 提取 `validate_message` 到共享模块, `core/message.py` 从此 re-export
+- **`sdk/aqap_sdk/message.py`** — `validate_message` 使用独立已知类型集合 (SDK 不依赖 core)
+- **`PROTOCOL.md`** — 更新加密格式说明 (AES-256-GCM 不需要 standalone `_tag`)
+- **`CONTRIBUTING.md`** — 新增贡献指南
+
+### P2 后续
+- **`aqap/agent/__init__.py`** — 导出 DLQConsumerAgent
+- SDK README 修复: `REPORT` → `REPORT_DELIVER`
+
+### 变更
+- `aqap/core/engine.py` — Agent 创建时透传 supervisor 参数
+- `tests/test_aqa.py` — 加密测试新增 GCM nonce 验证 + 篡改检测

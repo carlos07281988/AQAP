@@ -3,6 +3,8 @@ AQAP 安全层 — payload 端到端加密
 
 可选特性: 当 config.yaml 中 security.enabled=true 时,
 Agent 在 publish 前加密 payload, subscribe 后解密 payload。
+
+加密方式: AES-256-GCM (认证加密，防篡改)，符合 PROTOCOL.md §7.2。
 """
 from __future__ import annotations
 
@@ -16,67 +18,68 @@ logger = logging.getLogger("aqap.core.security")
 
 CRYPTO_AVAILABLE = False
 try:
-    from cryptography.fernet import Fernet
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     CRYPTO_AVAILABLE = True
 except ImportError:
     pass
 
 
-def _derive_key(password: str, salt: bytes) -> bytes:
-    """从密码派生 Fernet 密钥"""
-    kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=100_000)
-    return base64.urlsafe_b64encode(kdf.derive(password.encode()))
+def _derive_key_bytes(secret: str) -> bytes:
+    """从 secret 派生 32-byte AES-256 密钥"""
+    import hashlib
+    return hashlib.sha256(secret.encode()).digest()
 
 
 class PayloadCipher:
     """payload 加解密器
 
-    使用 Fernet (AES-128-CBC + HMAC) 对称加密。
+    使用 AES-256-GCM 认证加密。
     密钥从配置中的 security.secret 派生。
+    加密后格式: {"_encrypted": true, "_ciphertext": "<base64>", "_nonce": "<base64>"}
+    符合 PROTOCOL.md §7.2。
     """
 
     def __init__(self, secret: str | None = None):
         self._enabled = False
-        self._fernet = None
+        self._key: bytes | None = None
         if secret and CRYPTO_AVAILABLE:
-            # 使用 HMAC 风格派生 salt，而非直接截取 secret 前 16 字节
-            digest = hashes.Hash(hashes.SHA256())
-            digest.update(b"aqap-pbkdf2-salt-")
-            digest.update(secret.encode())
-            salt = digest.finalize()[:16]
-            key = _derive_key(secret, salt)
-            self._fernet = Fernet(key)
+            self._key = _derive_key_bytes(secret)
             self._enabled = True
+        elif secret and not CRYPTO_AVAILABLE:
+            logger.warning("cryptography 未安装, 无法启用加密")
 
     @property
     def enabled(self) -> bool:
         return self._enabled
 
     def encrypt_payload(self, payload: dict) -> dict:
-        """加密 payload
+        """加密 payload — AES-256-GCM
 
-        返回: {"_encrypted": True, "_ciphertext": "base64..."}
+        返回: {"_encrypted": True, "_ciphertext": "base64...", "_nonce": "base64..."}
         """
         if not self._enabled:
             return payload
         plaintext = json.dumps(payload, ensure_ascii=False).encode()
-        ciphertext = self._fernet.encrypt(plaintext)
+        nonce = os.urandom(12)  # GCM 推荐 12 字节
+        aesgcm = AESGCM(self._key)
+        ciphertext = aesgcm.encrypt(nonce, plaintext, None)
         return {
             "_encrypted": True,
             "_ciphertext": base64.b64encode(ciphertext).decode(),
+            "_nonce": base64.b64encode(nonce).decode(),
         }
 
     def decrypt_payload(self, payload: dict) -> dict:
-        """解密 payload"""
+        """解密 payload — AES-256-GCM"""
         if not self._enabled:
             return payload
         if not payload.get("_encrypted"):
             return payload
         ciphertext = base64.b64decode(payload["_ciphertext"])
-        plaintext = self._fernet.decrypt(ciphertext)
+        nonce = base64.b64decode(payload["_nonce"])
+        aesgcm = AESGCM(self._key)
+        plaintext = aesgcm.decrypt(nonce, ciphertext, None)
         return json.loads(plaintext.decode())
 
 

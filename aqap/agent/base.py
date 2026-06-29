@@ -44,6 +44,7 @@ class Agent(ABC):
         max_retries: int = 3,
         heartbeat_interval: int = 30,
         cipher: PayloadCipher | None = None,
+        supervisor=None,  # AgentSupervisor | None — for heartbeat callbacks
     ):
         self.agent_id = agent_id
         self._transport = transport
@@ -67,6 +68,7 @@ class Agent(ABC):
         self._idempotency_max_size: int = 10000
         self._idempotency_ttl: int = 300  # 5 分钟后自动过期
         self._last_idempotency_cleanup: float = 0.0
+        self._supervisor = supervisor  # for heartbeat callback
 
     @property
     @abstractmethod
@@ -162,6 +164,9 @@ class Agent(ABC):
             msg = heartbeat(self.agent_id)
             await self._transport.publish(Topic.BROADCAST, msg)
             await self._transport.publish(Topic.SYSTEM_EVENTS, msg)
+            # 通知 Supervisor 记录心跳时间戳
+            if self._supervisor:
+                self._supervisor.record_heartbeat(self.agent_id)
             logger.debug("[%s] 心跳发送", self.agent_id)
             await asyncio.sleep(self._heartbeat_interval)
 

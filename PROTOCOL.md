@@ -346,11 +346,12 @@ version = "MAJOR.MINOR"
 ```json
 {
   "_encrypted": true,
-  "_ciphertext": "base64-encoded",
-  "_nonce": "base64-encoded",
-  "_tag": "base64-encoded"
+  "_ciphertext": "base64-encoded-ciphertext-plus-tag",
+  "_nonce": "base64-encoded-12-byte-nonce"
 }
 ```
+
+AES-256-GCM 将认证标签嵌入 ciphertext 尾部，因此不需要单独的 `_tag` 字段。
 
 ### 7.3 Topic 级访问控制（规划中）
 

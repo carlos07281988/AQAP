@@ -113,7 +113,7 @@ publisher.xAdd('aqap:agent:judge', '*', { json: JSON.stringify(reply) });
 | `JUDGE_REQUEST` | 请求评判 | `aqap:agent:judge` | `{"task_id": "...", "evidences": [...]}` |
 | `JUDGE_VERDICT` | 评判裁决 | `aqap:agent:reporter` | `{"task_id": "...", "verdict": "PASS", "score": 92}` |
 | `REPORT_REQUEST` | 请求报告 | `aqap:agent:reporter` | `{"task_id": "...", "format": "html"}` |
-| `REPORT` | 报告结果 | 任意 | `{"report_url": "...", "summary": "..."}` |
+| `REPORT_DELIVER` | 报告送达 | 任意 | `{"task_id": "...", "report": {...}}` |
 | `ERROR` | 系统错误 | 任意 | `{"code": "TIMEOUT", "message": "..."}` |
 
 ### 标准 Topic

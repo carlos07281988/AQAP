@@ -322,10 +322,30 @@ class TestSecurity:
         encrypted = cipher.encrypt_payload(original)
         assert "_encrypted" in encrypted
         assert encrypted["_encrypted"] is True
+        assert "_nonce" in encrypted, "AES-256-GCM 必须包含 _nonce"
 
         decrypted = cipher.decrypt_payload(encrypted)
         assert decrypted["task_id"] == "secret-001"
         assert decrypted["data"] == "sensitive"
+
+    def test_gcm_tamper_detection(self):
+        """验证 GCM 认证加密能检测篡改"""
+        from aqap.core.security import PayloadCipher
+
+        cipher = PayloadCipher("test-secret-key-12345")
+        original = {"task_id": "tamper-001"}
+        encrypted = cipher.encrypt_payload(original)
+
+        # 篡改 ciphertext
+        import base64
+        corrupted = encrypted.copy()
+        raw = base64.b64decode(corrupted["_ciphertext"])
+        corrupted_bytes = raw[:-1] + bytes([raw[-1] ^ 0xFF])
+        corrupted["_ciphertext"] = base64.b64encode(corrupted_bytes).decode()
+
+        import pytest
+        with pytest.raises(Exception):
+            cipher.decrypt_payload(corrupted)
 
     def test_noop_when_disabled(self):
         from aqap.core.security import PayloadCipher

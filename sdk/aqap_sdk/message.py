@@ -80,6 +80,8 @@ class ErrorCode(str, Enum):
     ROUTING_FAILURE = "ROUTING_FAILURE"
     PROCESSING_ERROR = "PROCESSING_ERROR"
     TIMEOUT = "TIMEOUT"
+    AUTH_FAILURE = "AUTH_FAILURE"
+    FORBIDDEN = "FORBIDDEN"
 
     def __str__(self) -> str:
         return self.value
@@ -244,13 +246,27 @@ class AQAPMessage:
         )
 
 
-# ── 消息验证 ──
+# ── 验证 (从 SDK 本地副本) ──
+# 注意：外部 Agent 不依赖 aqap 内核，因此 SDK 保留自己的 validate_message。
+# 它与 aqap.core.validate.validate_message 行为完全一致。
+# 测试 test_validate_message_sync 确保两处输出一致。
+
+# 已知消息类型 (同步于 PROTOCOL.md §2)
+_KNOWN_TYPES = {
+    "UNKNOWN",
+    "HEARTBEAT", "REGISTER", "SHUTDOWN",
+    "TASK_DISPATCH", "TASK_RESULT",
+    "JUDGE_REQUEST", "JUDGE_VERDICT",
+    "REPORT_REQUEST", "REPORT_DELIVER",
+    "ERROR", "LOG", "PLUGIN_EVENT",
+}
+
 
 def validate_message(data: dict[str, Any]) -> list[str]:
     """
     验证消息信封是否符合 PROTOCOL.md §1 规范。
 
-    与 core validate_message 行为完全一致。
+    与 aqap.core.validate.validate_message 行为完全一致。
     返回错误列表，空列表表示消息合法。
     """
     errors: list[str] = []
@@ -269,8 +285,7 @@ def validate_message(data: dict[str, Any]) -> list[str]:
     # type 必须是已知类型
     raw_type = data.get("type")
     if isinstance(raw_type, str):
-        known_types = [t.value for t in MessageType]
-        if raw_type not in known_types and raw_type.upper() not in known_types:
+        if raw_type not in _KNOWN_TYPES and raw_type.upper() not in _KNOWN_TYPES:
             errors.append(f"未知消息类型: {raw_type}")
     elif raw_type is not None:
         errors.append(f"type 必须是字符串, 收到 {type(raw_type).__name__}")

@@ -85,6 +85,8 @@ class ErrorCode(str, Enum):
     ROUTING_FAILURE = "ROUTING_FAILURE"
     PROCESSING_ERROR = "PROCESSING_ERROR"
     TIMEOUT = "TIMEOUT"
+    AUTH_FAILURE = "AUTH_FAILURE"
+    FORBIDDEN = "FORBIDDEN"
 
     def __str__(self) -> str:
         return self.value
@@ -203,57 +205,8 @@ class Message:
         )
 
 
-# ── 消息验证 ──
-
-def validate_message(data: dict[str, Any]) -> list[str]:
-    """
-    验证消息信封是否符合 PROTOCOL.md §1 规范。
-
-    返回错误列表，空列表表示消息合法。
-    这条函数在 core 和 SDK 中必须保持行为一致。
-    """
-    errors: list[str] = []
-
-    # 必填字段存在性
-    required = ["type", "source", "payload", "version"]
-    for field in required:
-        if field not in data:
-            errors.append(f"缺少必填字段: {field}")
-
-    # source 不能为空
-    source = data.get("source", "")
-    if not isinstance(source, str) or not source.strip():
-        errors.append("source 不能为空")
-
-    # type 必须是已知类型
-    raw_type = data.get("type")
-    if isinstance(raw_type, str):
-        known_types = [t.value for t in MessageType]
-        if raw_type not in known_types and raw_type.upper() not in known_types:
-            errors.append(f"未知消息类型: {raw_type}")
-    elif raw_type is not None:
-        errors.append(f"type 必须是字符串, 收到 {type(raw_type).__name__}")
-
-    # version 检查
-    version = data.get("version", "")
-    if version:
-        major = version.split(".")[0] if "." in version else version
-        if not major.isdigit() or int(major) != 1:
-            errors.append(f"协议版本不匹配: 期望 1.x, 收到 {version}")
-
-    # target 和 correlation_id 必须是字符串 (允许空)
-    for field in ("target", "correlation_id"):
-        val = data.get(field)
-        if val is not None and not isinstance(val, str):
-            errors.append(f"{field} 必须是字符串, 收到 {type(val).__name__}")
-
-    # payload 必须是 dict
-    payload = data.get("payload")
-    if payload is not None and not isinstance(payload, dict):
-        errors.append("payload 必须是 JSON Object")
-
-    return errors
-
+# ── 消息验证 (导出, 实际逻辑在 aqap.core.validate) ──
+from aqap.core.validate import validate_message  # noqa: E402, F811
 
 # ── 便捷构造函数 ──
 

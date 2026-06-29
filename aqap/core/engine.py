@@ -53,6 +53,13 @@ def _discover_transports():
     except ImportError:
         pass
 
+    try:
+        from aqap.transport.rabbitmq_transport import RabbitMQTransport
+
+        TRANSPORT_MAP["rabbitmq"] = RabbitMQTransport
+    except ImportError:
+        pass
+
 
 # Agent 类型映射
 AGENT_MAP: dict[str, type[Agent]] = {
@@ -60,6 +67,20 @@ AGENT_MAP: dict[str, type[Agent]] = {
     "judge": JudgeAgent,
     "reporter": ReporterAgent,
 }
+
+try:
+    from aqap.agent.scheduler import SchedulerAgent
+
+    AGENT_MAP["scheduler"] = SchedulerAgent
+except ImportError:
+    pass
+
+try:
+    from aqap.agent.dlq_consumer import DLQConsumerAgent
+
+    AGENT_MAP["dlq-consumer"] = DLQConsumerAgent
+except ImportError:
+    pass
 
 
 class AQAPEngine:
@@ -246,6 +267,7 @@ class AQAPEngine:
                 max_retries=max_retries,
                 heartbeat_interval=heartbeat_interval,
                 cipher=self._cipher,
+                supervisor=self._supervisor,
                 **cfg.get("targets", {}),
              )
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aqap"
-version = "1.0.0"
+version = "1.1.0"
 description = "Agent Queue Agent Communication Protocol — 基于消息队列的 Agent 质量保障平台"
 requires-python = ">=3.9"
 dependencies = [
@@ -14,8 +14,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-kafka = ["kafka-python>=2.0"]
-dev = ["pytest>=7.0", "pytest-asyncio>=0.21", "pytest-cov>=4.0"]
+kafka = ["aiokafka>=0.10.0"]
+rabbitmq = ["aio-pika>=9.0"]
+admin = ["fastapi>=0.100", "uvicorn>=0.23"]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.21", "pytest-cov>=4.0", "ruff>=0.5"]
+all = ["aiokafka>=0.10.0", "aio-pika>=9.0", "fastapi>=0.100", "uvicorn>=0.23"]
 
 [project.urls]
 Homepage = "https://github.com/agent-quality-assurance/aqap"
@@ -23,3 +26,23 @@ Homepage = "https://github.com/agent-quality-assurance/aqap"
 [tool.setuptools.packages.find]
 include = ["aqap", "aqap.*", "aqap.plugins.*"]
 namespaces = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests", "sdk/tests"]
+addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests (require external services)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"

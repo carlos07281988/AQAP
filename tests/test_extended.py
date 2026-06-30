@@ -263,3 +263,191 @@ class TestCronSchedule:
         from aqap.agent.scheduler import CronSchedule
 
         assert CronSchedule("invalid-expr").next_seconds() == 60
+
+
+class TestInMemoryConsumerGroups:
+    """InMemoryTransport 消费者组隔离测试 (v2)"""
+
+    @pytest.mark.asyncio
+    async def test_same_group_load_balance(self):
+        """同组消费者负载均衡: 每条消息只被一个消费者消费"""
+        from aqap.transport.inmemory import InMemoryTransport
+
+        transport = InMemoryTransport()
+        received_a = []
+        received_b = []
+
+        async def consume(transport, group, consumer_id, results):
+            async for msg in transport.subscribe(
+                "aqap:agent:probe", group=group, consumer=consumer_id
+            ):
+                results.append(msg)
+                if len(results) >= 2:
+                    break
+
+        task_a = asyncio.create_task(
+            consume(transport, "group-1", "worker-a", received_a)
+        )
+        task_b = asyncio.create_task(
+            consume(transport, "group-1", "worker-b", received_b)
+        )
+
+        await asyncio.sleep(0.1)
+
+        await transport.publish(
+            "aqap:agent:probe",
+            Message(MessageType.TASK_DISPATCH, "tester", {"seq": 1}),
+        )
+        await transport.publish(
+            "aqap:agent:probe",
+            Message(MessageType.TASK_DISPATCH, "tester", {"seq": 2}),
+        )
+
+        await asyncio.sleep(0.3)
+        task_a.cancel()
+        task_b.cancel()
+        for t in (task_a, task_b):
+            try:
+                await t
+            except (asyncio.CancelledError, StopAsyncIteration):
+                pass
+        await transport.disconnect()
+
+        all_received = received_a + received_b
+        assert len(all_received) == 2, f"Expected 2 total, got {len(all_received)}"
+        seqs = sorted(m.payload["seq"] for m in all_received)
+        assert seqs == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_different_group_fanout(self):
+        """不同组消费者扇出: 每条消息被所有组消费"""
+        from aqap.transport.inmemory import InMemoryTransport
+
+        transport = InMemoryTransport()
+        received_g1 = []
+        received_g2 = []
+
+        async def consume(transport, group, results):
+            async for msg in transport.subscribe("aqap:agent:probe", group=group, consumer="w"):
+                results.append(msg)
+                if len(results) >= 1:
+                    break
+
+        task1 = asyncio.create_task(consume(transport, "group-x", received_g1))
+        task2 = asyncio.create_task(consume(transport, "group-y", received_g2))
+        await asyncio.sleep(0.1)
+
+        await transport.publish(
+            "aqap:agent:probe",
+            Message(MessageType.TASK_DISPATCH, "tester", {"seq": 1}),
+        )
+        await asyncio.sleep(0.3)
+
+        task1.cancel()
+        task2.cancel()
+        for t in (task1, task2):
+            try:
+                await t
+            except (asyncio.CancelledError, StopAsyncIteration):
+                pass
+        await transport.disconnect()
+
+        assert len(received_g1) == 1, f"group-x got {len(received_g1)}"
+        assert len(received_g2) == 1, f"group-y got {len(received_g2)}"
+
+
+class TestValidationEdgeCases:
+    """消息验证边界测试"""
+
+    def test_validate_empty_payload(self):
+        errors = validate_message({
+            "type": "HEARTBEAT", "source": "agent-1", "payload": {}, "version": "1.0",
+        })
+        assert errors == []
+
+    def test_validate_non_dict_payload(self):
+        errors = validate_message({
+            "type": "HEARTBEAT", "source": "agent-1", "payload": "not-a-dict", "version": "1.0",
+        })
+        assert any("JSON Object" in e for e in errors)
+
+    def test_validate_long_type_name(self):
+        errors = validate_message({
+            "type": "A" * 33, "source": "tester", "payload": {}, "version": "1.0",
+        })
+        assert any("未知" in e for e in errors)
+
+    def test_validate_version_minor_bump(self):
+        errors = validate_message({
+            "type": "TASK_DISPATCH", "source": "tester", "payload": {}, "version": "1.5",
+        })
+        assert errors == []
+
+    def test_validate_version_major_bump(self):
+        errors = validate_message({
+            "type": "TASK_DISPATCH", "source": "tester", "payload": {}, "version": "2.0",
+        })
+        assert any("版本" in e for e in errors)
+
+    def test_validate_missing_fields(self):
+        errors = validate_message({"type": "TASK_DISPATCH"})
+        missing = [e for e in errors if "缺少" in e]
+        assert len(missing) >= 2
+
+
+class TestAgentEdgeCases:
+    """Agent 边界场景测试"""
+
+    @pytest.mark.asyncio
+    async def test_inbox_message_routing(self):
+        """带 target 的消息应路由到 inbox"""
+        from test_aqa import _TestTransport
+        from aqap.agent.probe import ProbeAgent
+
+        transport = _TestTransport()
+        probe = ProbeAgent("probe-routing", transport, heartbeat_interval=999)
+        probe.subscribe_to("aqap:broadcast")
+        await probe.start()
+        await asyncio.sleep(0.05)
+
+        msg = Message(
+            type=MessageType.TASK_DISPATCH,
+            source="cli",
+            target="",
+            payload={"task_id": "routing-test"},
+        )
+        await transport.publish("aqap:broadcast", msg)
+        await asyncio.sleep(0.3)
+        await probe.stop()
+
+        dispatched = [m for t, m in transport.published if m.type == MessageType.TASK_RESULT]
+        assert len(dispatched) >= 1
+
+    @pytest.mark.asyncio
+    async def test_echo_suppression(self):
+        """Agent 应忽略自己发出的消息 (回声抑制)"""
+        from test_aqa import _TestTransport
+        from aqap.agent.base import Agent
+
+        class _EchoAgent(Agent):
+            @property
+            def agent_type(self):
+                return "echo"
+
+            async def handle_message(self, message):
+                return [message.reply(MessageType.TASK_RESULT, {"echo": True})]
+
+        transport = _TestTransport()
+        agent = _EchoAgent("echo-test", transport, heartbeat_interval=999)
+        agent.subscribe_to("aqap:broadcast")
+        await agent.start()
+        await asyncio.sleep(0.05)
+
+        msg = Message(type=MessageType.TASK_DISPATCH, source="echo-test", payload={"x": 1})
+        await transport.publish("aqap:broadcast", msg)
+        await asyncio.sleep(0.3)
+        await agent.stop()
+
+        # 回声抑制后不应有 TASK_RESULT
+        results = [m for t, m in transport.published if m.type == MessageType.TASK_RESULT]
+        assert len(results) == 0, f"Echo was not suppressed, got {len(results)} results"

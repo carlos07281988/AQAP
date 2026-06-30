@@ -1,15 +1,19 @@
 """
 AQAP Kafka Transport — 完整实现
 
+v2 改进:
+  - 关闭自动提交偏移量 (enable_auto_commit=False)
+  - ack() 时手动提交偏移量，保证 at-least-once 语义
+  - 存储 consumer 引用供 ack 使用
+
 依赖: aiokafka>=0.10.0
 使用前需安装: pip install aiokafka
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Any
 
 from aqap.transport.base import Transport
 from aqap.core.message import Message, Topic
@@ -17,7 +21,7 @@ from aqap.core.message import Message, Topic
 logger = logging.getLogger("aqap.transport.kafka")
 
 try:
-    from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
+    from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, ConsumerRecord
 
     KAFKA_AVAILABLE = True
 except ImportError:
@@ -27,7 +31,10 @@ except ImportError:
 class KafkaTransport(Transport):
     """Apache Kafka 后端实现
 
-    与 Redis Streams Transport 接口完全一致, 切换后端不改 Agent 代码。
+    at-least-once 语义:
+      - 关闭自动提交偏移量
+      - ack() 时手动提交 (每次处理成功后提交)
+      - 崩溃后消费者重新加入时会重复处理未提交的消息
 
     使用要求:
         pip install aiokafka
@@ -45,14 +52,19 @@ class KafkaTransport(Transport):
                 "KafkaTransport 需要 aiokafka, 请执行: pip install aiokafka"
             )
 
-        self._servers = servers
+        self._servers = servers.split(",") if "," in servers else [servers]
         self._client_id = client_id
         self._producer: AIOKafkaProducer | None = None
         self._consumers: dict[str, AIOKafkaConsumer] = {}
         self._running = False
+        # 追踪最后一个 yield 的 record 供 ack 使用
+        self._last_record: dict[str, ConsumerRecord] = {}
+
+    @property
+    def name(self) -> str:
+        return "kafka"
 
     async def connect(self) -> None:
-        """建立 Kafka 连接 (创建生产者)"""
         self._producer = AIOKafkaProducer(
             bootstrap_servers=self._servers,
             client_id=self._client_id,
@@ -64,7 +76,6 @@ class KafkaTransport(Transport):
         logger.info("[kafka] 已连接 %s", self._servers)
 
     async def disconnect(self) -> None:
-        """关闭所有连接"""
         self._running = False
         for topic, consumer in self._consumers.items():
             await consumer.stop()
@@ -74,30 +85,27 @@ class KafkaTransport(Transport):
         logger.info("[kafka] 已断开")
 
     async def publish(self, topic: str, message: Message) -> None:
-        """发布消息到 Kafka topic"""
         if not self._producer:
             raise RuntimeError("Kafka 未连接, 请先调用 connect()")
         payload = message.to_json().encode("utf-8")
         await self._producer.send_and_wait(topic, payload)
+        logger.debug("[kafka] 已发布 %s → %s", message.message_id[:8], topic)
 
     def subscribe(
         self, topic: str, group: str = "aqap-default", consumer: str = ""
     ) -> AsyncGenerator[Message, None]:
-        """订阅 Kafka topic (返回异步生成器)"""
         return self._subscribe_loop(topic, group, consumer)
 
     async def _subscribe_loop(
         self, topic: str, group: str, consumer_id: str
     ) -> AsyncGenerator[Message, None]:
-        """内部消费循环"""
         kafka_consumer = AIOKafkaConsumer(
             topic,
             bootstrap_servers=self._servers,
             group_id=group,
             client_id=consumer_id or f"{self._client_id}-{topic}",
             auto_offset_reset="earliest",
-            enable_auto_commit=True,
-            auto_commit_interval_ms=5000,
+            enable_auto_commit=False,  # 手动提交保证 at-least-once
         )
         self._consumers[topic] = kafka_consumer
         await kafka_consumer.start()
@@ -108,7 +116,10 @@ class KafkaTransport(Transport):
                     break
                 try:
                     decoded = json.loads(msg.value.decode("utf-8"))
-                    yield Message.from_dict(decoded)
+                    message = Message.from_dict(decoded)
+                    # 保存 record 供 ack 使用
+                    self._last_record[topic] = msg
+                    yield message
                 except (json.JSONDecodeError, KeyError) as e:
                     logger.warning("[kafka] 消息解析失败 topic=%s: %s", topic, e)
         finally:
@@ -117,9 +128,22 @@ class KafkaTransport(Transport):
             await kafka_consumer.stop()
 
     async def ack(self, topic: str | Topic, message_id: str | None = None, group: str = "") -> None:
-        """Kafka 使用自动提交偏移量, 无需手动 ACK"""
-        pass
+        """手动提交偏移量 (at-least-once 保证)"""
+        topic_str = str(topic.value) if isinstance(topic, Topic) else topic
+        consumer = self._consumers.get(topic_str)
+        if consumer:
+            try:
+                await consumer.commit()
+            except Exception as e:
+                logger.warning("[kafka] 提交偏移量失败 topic=%s: %s", topic_str, e)
 
     async def create_group(self, topic: str, group: str) -> None:
         """Kafka 消费组自动创建, 无需手动"""
-        pass
+
+    async def health(self) -> dict[str, Any]:
+        try:
+            if self._producer:
+                return {"status": "ok", "backend": "kafka"}
+        except Exception as e:
+            return {"status": "error", "backend": "kafka", "error": str(e)}
+        return {"status": "disconnected", "backend": "kafka"}

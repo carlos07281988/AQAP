@@ -80,6 +80,7 @@ class SchedulerAgent(Agent):
         **kwargs,
     ):
         super().__init__(agent_id, transport, **kwargs)
+        self._skip_consume = True  # 调度器不消费入站消息
         self._schedules: list[CronSchedule] = []
         self._topics: list[str] = []
         self._payloads: list[dict] = []

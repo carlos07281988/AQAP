@@ -17,18 +17,34 @@ from typing import Any
 logger = logging.getLogger("aqap.core.security")
 
 CRYPTO_AVAILABLE = False
+HKDF_AVAILABLE = False
 try:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cryptography.hazmat.primitives import hashes
 
+    HKDF_AVAILABLE = True
     CRYPTO_AVAILABLE = True
 except ImportError:
     pass
 
 
 def _derive_key_bytes(secret: str) -> bytes:
-    """从 secret 派生 32-byte AES-256 密钥"""
+    """从 secret 派生 32-byte AES-256 密钥 (HKDF with SHA-256)
+
+    生产环境使用 HKDF (基于 HMAC 的密钥派生函数)，
+    比原始 SHA-256 更安全，防止长度扩展攻击。
+    回退: SHA-256 (仅当 cryptography 版本过旧时)。
+    """
+    raw = secret.encode("utf-8")
+    if HKDF_AVAILABLE:
+        hkdf = HKDF(
+            algorithm=hashes.SHA256(), length=32, salt=None, info=b"aqap-payload-key"
+        )
+        return hkdf.derive(raw)
+    # 回退: SHA-256 (向后兼容)
     import hashlib
-    return hashlib.sha256(secret.encode()).digest()
+    return hashlib.sha256(raw).digest()
 
 
 class PayloadCipher:

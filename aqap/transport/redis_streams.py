@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+
 import json
 import logging
 from typing import Any, AsyncGenerator
@@ -18,7 +19,11 @@ class RedisStreamsTransport(Transport):
 
     使用 Redis 原生的 Stream 数据结构实现可靠的消息传递，
     支持消费组、待处理消息列表 (pending list) 和死信机制。
-    接口与 Transport 基类完全一致，可切换后端而不改 Agent 代码。
+
+    v2 改进:
+      - 去掉空轮询的 sleep(0.1), 完全依赖 BLOCK 参数实现长轮询
+      - 添加连接异常自动重连
+      - 改进 bytes/str key 兼容性
     """
 
     def __init__(self, stream_url: str = "redis://127.0.0.1:6379", **kwargs):
@@ -26,6 +31,7 @@ class RedisStreamsTransport(Transport):
 
         self._redis: aioredis.Redis = aioredis.from_url(stream_url, **kwargs)
         self._running = False
+        self._stream_url = stream_url
 
     @property
     def name(self) -> str:
@@ -64,30 +70,38 @@ class RedisStreamsTransport(Transport):
         group: str = "aqap-default",
         consumer: str = "",
     ) -> AsyncGenerator[Message, None]:
-        """订阅 topic 并持续消费消息（异步生成器）"""
+        """订阅 topic 并持续消费消息（异步生成器）
+
+        长轮询:
+          - 使用 XREADGROUP BLOCK 5000 实现 (无需额外 sleep)
+          - 异常时自动重连 Redis 连接
+        """
         topic_str = str(topic.value) if isinstance(topic, Topic) else topic
         await self.create_group(topic_str, group)
 
         while self._running:
             try:
                 results = await self._redis.xreadgroup(
-                    group, consumer, {topic_str: ">"}, count=10, block=2000
+                    group, consumer, {topic_str: ">"},
+                    count=10, block=5000,
                 )
                 if not results:
-                    await asyncio.sleep(0.1)
                     continue
 
-                for stream_name, messages in results:
+                for _stream_name, messages in results:
                     for msg_id, data in messages:
                         try:
-                            raw = data.get(b"json", data.get("json", ""))
-                            if isinstance(raw, bytes):
-                                raw = raw.decode()
+                            # 兼容 bytes/str key
+                            raw = None
+                            for k in (b"json", "json"):
+                                val = data.get(k)
+                                if val is not None:
+                                    raw = val.decode() if isinstance(val, bytes) else val
+                                    break
                             if not raw:
                                 continue
 
                             message = Message.from_json(raw)
-                            # 附加 transport 层 msg_id，供 ack 使用
                             message._transport_msg_id = msg_id
                             yield message
                         except Exception as e:
@@ -95,8 +109,13 @@ class RedisStreamsTransport(Transport):
             except Exception as e:
                 if not self._running:
                     break
-                logger.error("[redis] 订阅循环异常: %s", e)
-                await asyncio.sleep(1)
+                logger.error("[redis] 订阅循环异常, 5s 后重连: %s", e)
+                await asyncio.sleep(5)
+                try:
+                    await self._redis.ping()
+                except Exception:
+                    logger.info("[redis] 尝试重新连接...")
+                    await self.connect()
 
     async def ack(self, topic: str | Topic, message_id: str | None = None, group: str = "") -> None:
         """确认消息已处理"""

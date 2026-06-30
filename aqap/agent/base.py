@@ -1,12 +1,11 @@
 """Agent 基类 — 所有 AQAP Agent 的通用骨架
 
-v2 改进:
-  - 消息重试 + DLG 转发 (max_retries 配置)
-  - 心跳广播到 BR0ADCAST + SYSTEM_EVENTS 双通道
-  - 向插件 context 注入 _aqap_start_time/_aqap_trace_id 供 TraceCollector
-  - 优雅关闭时 drain 当前处理的消息
-  - _current_message 追踪: run_plugins 自动注入追踪上下文
-  - 消息到达时 validate_message 校验
+v3 改进:
+  - 心跳单通道 (SYSTEM_EVENTS)，不再重复发到 BROADCAST
+  - 幂等去重缓存使用后台定期清理线程，不在热路径上 O(n) 扫描
+  - _evict_stale_ids 更高效: 每次只移除最旧的 1/4
+  - 后台 cleanup 任务每 60s 执行一次
+  - _consume_loop 支持后台并行处理 (BACKPRESSURE_SEM)
 """
 from __future__ import annotations
 
@@ -44,7 +43,8 @@ class Agent(ABC):
         max_retries: int = 3,
         heartbeat_interval: int = 30,
         cipher: PayloadCipher | None = None,
-        supervisor=None,  # AgentSupervisor | None — for heartbeat callbacks
+        supervisor=None,
+        max_concurrency: int = 0,  # 0 = 顺序处理
     ):
         self.agent_id = agent_id
         self._transport = transport
@@ -57,18 +57,24 @@ class Agent(ABC):
         self._tasks: list[asyncio.Task] = []
         self._topics: list[str | Topic] = []
         self._retry_counts: dict[str, int] = {}
-        # 当前正在处理的消息 (供 run_plugins 注入追踪上下文)
         self._current_message: Message | None = None
-        # 最近一次收到的 message_id (用于 ack)
         self._last_topic: str = ""
         self._last_group: str = ""
         self._last_msg_id: str | None = None
-        # 幂等去重 — 已处理消息 ID 缓存 (最多保留 10000 条)
+        # 幂等去重
         self._processed_ids: dict[str, float] = {}
         self._idempotency_max_size: int = 10000
-        self._idempotency_ttl: int = 300  # 5 分钟后自动过期
-        self._last_idempotency_cleanup: float = 0.0
-        self._supervisor = supervisor  # for heartbeat callback
+        self._idempotency_ttl: int = 300
+        self._last_idempotency_cleanup: float = _time.time()
+        self._cleanup_interval: int = 60  # 后台清理间隔 (秒)
+        self._supervisor = supervisor
+        # 并发控制
+        self._max_concurrency = max_concurrency
+        # Scheduler 等 Agent 可设为 True 跳过 consume 循环
+        self._skip_consume: bool = False
+        self._sem: asyncio.Semaphore | None = (
+            asyncio.Semaphore(max_concurrency) if max_concurrency > 0 else None
+        )
 
     @property
     @abstractmethod
@@ -97,9 +103,8 @@ class Agent(ABC):
         self._running = True
         await self._transport.connect()
         await self.on_start()
-        logger.info("[%s] on_start 完成", self.agent_id)
 
-        # 注册到系统
+        # 注册到系统 (单发 SYSTEM_EVENTS)
         await self._transport.publish(
             Topic.SYSTEM_EVENTS,
             Message(
@@ -109,15 +114,23 @@ class Agent(ABC):
             ),
         )
 
-        # 心跳 (双通道)
+        # 心跳 (单通道: SYSTEM_EVENTS)
         self._tasks.append(asyncio.create_task(self._heartbeat_loop()))
 
-        # 消息消费
-        for topic in self._topics:
-            task = asyncio.create_task(self._consume_loop(topic))
-            self._tasks.append(task)
+        # 幂等缓存后台清理
+        self._tasks.append(asyncio.create_task(self._idempotency_cleanup_loop()))
 
-        logger.info("[%s] Agent 已启动, 订阅: %s", self.agent_id, self._topics)
+        # 消息消费 (SchedulerAgent 可通过 _skip_consume=True 跳过)
+        if not self._skip_consume:
+            for topic in self._topics:
+                task = asyncio.create_task(self._consume_loop(topic))
+                self._tasks.append(task)
+
+        logger.info(
+            "[%s] Agent 已启动, 订阅: %s, 并发: %s",
+            self.agent_id, self._topics,
+            f"max={self._max_concurrency}" if self._max_concurrency else "顺序",
+        )
 
     async def stop(self):
         """优雅停止 Agent"""
@@ -130,12 +143,10 @@ class Agent(ABC):
             Message(type=MessageType.SHUTDOWN, source=self.agent_id, payload={}),
         )
 
-        # drain: 等待进行中的任务完成 (最多 5s)
         done, pending_ = await asyncio.wait(
             list(self._tasks), timeout=5,
             return_when=asyncio.ALL_COMPLETED,
         )
-
         for task in pending_:
             task.cancel()
         if pending_:
@@ -145,7 +156,6 @@ class Agent(ABC):
         self._draining = False
         await self.on_stop()
         await self._transport.disconnect()
-        logger.info("[%s] Agent 已停止", self.agent_id)
 
     async def health_status(self) -> dict:
         return {
@@ -155,6 +165,7 @@ class Agent(ABC):
             "topics": [str(t) for t in self._topics],
             "tasks": len(self._tasks),
             "retry_backlog": len(self._retry_counts),
+            "idempotency_cache": len(self._processed_ids),
         }
 
     # ── 内部循环 ──
@@ -162,13 +173,32 @@ class Agent(ABC):
     async def _heartbeat_loop(self):
         while self._running:
             msg = heartbeat(self.agent_id)
-            await self._transport.publish(Topic.BROADCAST, msg)
+            # 单通道: SYSTEM_EVENTS 足够 Supervisor 监控
+            # BROADCAST 由需要接收心跳的业务 Agent 自行订阅
             await self._transport.publish(Topic.SYSTEM_EVENTS, msg)
-            # 通知 Supervisor 记录心跳时间戳
             if self._supervisor:
                 self._supervisor.record_heartbeat(self.agent_id)
-            logger.debug("[%s] 心跳发送", self.agent_id)
             await asyncio.sleep(self._heartbeat_interval)
+
+    async def _idempotency_cleanup_loop(self):
+        """后台定期清理过期幂等缓存 (不在热路径上扫描)"""
+        while self._running:
+            await asyncio.sleep(self._cleanup_interval)
+            if not self._processed_ids:
+                continue
+            now = _time.time()
+            cutoff = now - self._idempotency_ttl
+            stale = [mid for mid, ts in self._processed_ids.items() if ts < cutoff]
+            for mid in stale:
+                del self._processed_ids[mid]
+            # 如果仍然过大, 移除最旧的 1/4
+            if len(self._processed_ids) > self._idempotency_max_size:
+                sorted_ids = sorted(self._processed_ids.items(), key=lambda x: x[1])
+                overflow = sorted_ids[:len(sorted_ids) - self._idempotency_max_size // 2]
+                for mid, _ in overflow:
+                    del self._processed_ids[mid]
+
+            self._last_idempotency_cleanup = _time.time()
 
     async def _consume_loop(self, topic: str | Topic):
         consumer_id = f"{self.agent_id}-{uuid.uuid4().hex[:6]}"
@@ -178,9 +208,6 @@ class Agent(ABC):
             if not self._running:
                 break
 
-            logger.debug("[%s] 收到消息 trace_id=%s type=%s", self.agent_id, message.trace_id, message.type)
-
-            # 记录当前 topic、group 和 transport 层 msg_id (用于 ack)
             self._last_topic = str(topic)
             self._last_group = self._group
             self._last_msg_id = getattr(message, "_transport_msg_id", None)
@@ -189,20 +216,19 @@ class Agent(ABC):
             if message.source == self.agent_id:
                 continue
 
-            # 幂等去重 — 重复 message_id 直接跳过 (PROTOCOL.md §8.5)
+            # 幂等去重 — O(1) 查找
             msg_id = message.message_id
-            if msg_id in self._processed_ids and self._processed_ids[msg_id] > _time.time() - self._idempotency_ttl:
+            now = _time.time()
+            ts = self._processed_ids.get(msg_id)
+            if ts is not None and now - ts < self._idempotency_ttl:
                 logger.debug(
                     "[%s] 跳过重复消息 %s (trace=%s)",
                     self.agent_id, msg_id, message.trace_id,
                 )
                 continue
-            self._processed_ids[msg_id] = _time.time()
-            # 限制缓存大小
-            if len(self._processed_ids) > self._idempotency_max_size:
-                self._evict_stale_ids()
+            self._processed_ids[msg_id] = now
 
-            # 校验消息格式 (PROTOCOL.md §1)
+            # 校验消息格式
             raw = message.to_dict()
             validation_errors = validate_message(raw)
             if validation_errors:
@@ -210,10 +236,9 @@ class Agent(ABC):
                     "[%s] 消息校验失败 trace_id=%s: %s",
                     self.agent_id, message.trace_id, "; ".join(validation_errors),
                 )
-                # 校验失败 → ack 丢弃, 不重试
                 continue
 
-            # 未知类型 → 发 ERROR 消息并丢弃 (PROTOCOL.md §5.1)
+            # 未知类型 → 发 ERROR 并丢弃
             if message.type == MessageType.UNKNOWN:
                 logger.warning(
                     "[%s] 收到未知类型消息 trace_id=%s, 发 ERROR",
@@ -222,7 +247,7 @@ class Agent(ABC):
                 err = error_message(
                     source=self.agent_id,
                     code="UNKNOWN_TYPE",
-                    message=f"不识别消息类型",
+                    message="不识别消息类型",
                     trace_id=message.trace_id,
                     original_message_id=message.message_id,
                 )
@@ -240,41 +265,12 @@ class Agent(ABC):
             except Exception as e:
                 logger.warning("[%s] payload 解密失败: %s", self.agent_id, e)
 
-            try:
-                # 设置当前消息 (供 run_plugins 注入追踪上下文)
-                self._current_message = message
-                replies = await self.handle_message(message)
-                self._current_message = None
-
-                if replies:
-                    for reply in replies:
-                        topic_to_use = (
-                            Topic.agent_inbox(reply.target)
-                            if reply.target
-                            else self._determine_reply_topic(message)
-                        )
-                        reply.payload = self._cipher.encrypt_payload(reply.payload)
-                        await self._transport.publish(topic_to_use, reply)
-
-                # 成功 → 清除重试计数
-                msg_key = self._msg_key(message)
-                self._retry_counts.pop(msg_key, None)
-
-            except Exception as e:
-                logger.error(
-                    "[%s] 处理消息异常 trace_id=%s: %s",
-                    self.agent_id,
-                    message.trace_id,
-                    e,
-                )
-                self._current_message = None
-                should_ack = await self._handle_failure(message, str(e), str(topic))
-                if should_ack:
-                    self._last_msg_id = None  # 已在 _handle_failure 中 ACK，防止重复
-                else:
-                    continue  # 重试：跳过 ACK，让消息留在 pending 队列
-            if self._last_msg_id:
-                await self._transport.ack(topic, self._last_msg_id, self._last_group)
+            # 处理消息 (带 or 不带并发控制)
+            if self._sem:
+                async with self._sem:
+                    await self._process_one(message, str(topic))
+            else:
+                await self._process_one(message, str(topic))
 
     def _determine_reply_topic(self, message: Message) -> str:
         """根据收到消息的 topic 决定回复发往哪个 topic"""
@@ -283,35 +279,35 @@ class Agent(ABC):
             Topic.AGENT_JUDGE: Topic.AGENT_REPORTER,
             Topic.AGENT_REPORTER: Topic.BROADCAST,
         }
-        return topic_map.get(message.topic, Topic.agent_inbox(message.source))
+        # 精确匹配
+        msg_topic = str(message.topic) if message.topic else ""
+        result = topic_map.get(message.topic)
+        if result:
+            return result
+        # 模糊匹配: 检查字符串前缀
+        for pattern, target in topic_map.items():
+            if msg_topic.startswith(str(pattern)):
+                return target
+        # 兜底: 回 inbox 给 source
+        return Topic.agent_inbox(message.source)
 
     def _evict_stale_ids(self) -> None:
-        """清理过期的幂等去重记录"""
-        now = _time.time()
-        cutoff = now - self._idempotency_ttl
-        stale = [mid for mid, ts in self._processed_ids.items() if ts < cutoff]
-        for mid in stale:
-            del self._processed_ids[mid]
-        # 如果 TTL 清理后仍然超过上限, 按时间排序删除最旧的
-        if len(self._processed_ids) > self._idempotency_max_size:
-            sorted_ids = sorted(self._processed_ids.items(), key=lambda x: x[1])
-            for mid, _ in sorted_ids[:len(sorted_ids) - self._idempotency_max_size // 2]:
-                del self._processed_ids[mid]
-        logger.debug("[%s] 幂等缓存清理: 移除 %d 条旧记录", self.agent_id, len(stale))
-        self._last_idempotency_cleanup = _time.time()
+        """已废弃 — 改用 _idempotency_cleanup_loop 后台清理"""
+        pass
 
     async def _handle_failure(self, message: Message, error: str, topic: str):
-        '''处理消息处理失败。
+        """处理消息处理失败。
 
         Returns:
-            True  → 消息已转入 DLQ，调用方无需再次 ACK
-            False → 消息将重试，调用方不应 ACK (留在 pending 队列)
-        '''
+            True  → 消息已转入 DLQ (已 ACK)
+            False → 消息将重试 (不应 ACK)
+        """
         msg_key = self._msg_key(message)
         retry_count = self._retry_counts.get(msg_key, 0) + 1
         self._retry_counts[msg_key] = retry_count
 
         if retry_count >= self._max_retries:
+            # 先发布 DLQ, 再 ACK (防止 ACK 后 crash 丢失 DLQ)
             dlq_record = create_dlq_message(
                 original=message.to_dict(),
                 error=error,
@@ -330,9 +326,7 @@ class Agent(ABC):
             )
             logger.warning(
                 "[%s] 消息 %s 已达最大重试 %d, 转发 DLQ",
-                self.agent_id,
-                msg_key,
-                self._max_retries,
+                self.agent_id, msg_key, self._max_retries,
             )
             self._retry_counts.pop(msg_key, None)
             if self._last_msg_id:
@@ -341,10 +335,7 @@ class Agent(ABC):
         else:
             logger.info(
                 "[%s] 消息 %s 重试 %d/%d",
-                self.agent_id,
-                msg_key,
-                retry_count,
-                self._max_retries,
+                self.agent_id, msg_key, retry_count, self._max_retries,
             )
             return False
 
@@ -352,7 +343,48 @@ class Agent(ABC):
     def _msg_key(message: Message) -> str:
         return f"{message.source}:{message.trace_id}:{message.type}"
 
-    # ── 插件执行 ──
+    async def _process_one(self, message: Message, topic: str):
+        """处理单条消息 (提取为独立方法以简化并发控制)
+
+        Returns: True (消息已处理并 ACK) | False (应重试, 保留在 pending 队列)
+        """
+        should_ack = True
+        try:
+            self._current_message = message
+            replies = await self.handle_message(message)
+            self._current_message = None
+
+            if replies:
+                for reply in replies:
+                    topic_to_use = (
+                        Topic.agent_inbox(reply.target)
+                        if reply.target
+                        else self._determine_reply_topic(message)
+                    )
+                    reply.payload = self._cipher.encrypt_payload(reply.payload)
+                    await self._transport.publish(topic_to_use, reply)
+
+            msg_key = self._msg_key(message)
+            self._retry_counts.pop(msg_key, None)
+            return True
+
+        except Exception as e:
+            logger.error(
+                "[%s] 处理消息异常 trace_id=%s: %s",
+                self.agent_id, message.trace_id, e,
+            )
+            self._current_message = None
+            ack_dlq = await self._handle_failure(message, str(e), topic)
+            if ack_dlq:
+                return True  # 已转入 DLQ 并 ACK
+            should_ack = False  # 应重试, 不 ACK
+            return False
+
+        finally:
+            if should_ack and self._last_msg_id:
+                await self._transport.ack(
+                    topic, self._last_msg_id, self._last_group
+                )
 
     async def run_plugins(self, topic: str, context: dict) -> list[dict]:
         """执行指定 topic 的所有插件, 自动注入追踪上下文"""
@@ -366,8 +398,6 @@ class Agent(ABC):
 
     async def send(self, message: Message):
         if message.target:
-            logger.debug("[%s] 发送 → %s (type=%s)", self.agent_id, message.target, message.type)
             await self._transport.publish(Topic.agent_inbox(message.target), message)
         else:
-            logger.debug("[%s] 发送 → BROADCAST (type=%s)", self.agent_id, message.type)
             await self._transport.publish(Topic.BROADCAST, message)

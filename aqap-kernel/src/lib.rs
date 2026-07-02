@@ -14,5 +14,11 @@ fn aqap_kernel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", "0.1.0")?;
     m.add("MAGIC", types::MAGIC)?;
     m.add("HEADER_SIZE", types::HEADER_SIZE)?;
+
+    // Wire format
+    m.add_class::<wire::WireHeader>()?;
+    m.add_function(wrap_pyfunction!(wire::wire_header_encode, m)?)?;
+    m.add_function(wrap_pyfunction!(wire::wire_header_decode, m)?)?;
+
     Ok(())
 }

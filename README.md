@@ -1,4 +1,4 @@
-# AQAP — Agent Queue Agent Communication Protocol
+# AQAP v3 — Agent Queue Agent Communication Protocol
 
 基于消息队列的 Agent 间通信协议与质量保障系统。
 
@@ -14,11 +14,11 @@
 │                         设计原则                                    │
 │                                                                    │
 │  1. 队列即协议 — MQ 就是通信契约, 不是 RPC 的传输层                │
-│  2. 信封标准化 — 所有消息共享同一个 JSON 信封结构                  │
-│  3. 版本化演进 — 协议版本字段保证多版本 Agent 共存                │
-│  4. 全链路追踪 — trace_id 贯穿所有消息, 无死角                    │
-│  5. 可插拔后端 — Transport 层屏蔽队列实现 (Redis/Kafka/内存)      │
-│  6. 外部友好  — 任何语言只要拼 JSON 就能接入                      │
+│  2. 三层分离   — Transport(路由) / Protocol(追踪) / Schema(契约)  │
+│  3. 设计时分离, 运行时零拷贝 — 概念清晰 + 性能极致                │
+│  4. 全链路追踪 — trace_id 贯穿所有消息, span_id 标记每步处理      │
+│  5. 可插拔后端 — Transport 层屏蔽队列实现 (Redis/Kafka/RabbitMQ)  │
+│  6. 极致简单   — 声明式 1 行注解, 函数式 5 行跑, curl 都能接入   │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -29,296 +29,369 @@
 | 耦合度 | 调用方依赖被调方的地址+接口定义 | 零依赖, 只认 topic |
 | 背压 | 调用方需要自己处理超时/重试 | 队列自带 backpressure |
 | 故障隔离 | 级联失败 (A 挂了→B 重试→C 雪崩) | 消费者故障不影响生产者 |
-| 多语言 | 每个语言写一套 client stub | 拼 JSON 即可 |
+| 多语言 | 每个语言写一套 client stub | 拼 JSON 即可, 或装 SDK |
 | 热升级 | 需要服务发现 + 负载均衡 | 停消费者→升级→启动, 消息不丢 |
-| 可观测 | 需要额外埋点 | 消息本身带 trace_id |
+| 可观测 | 需要额外埋点 | 消息本身带 trace_id + span_id |
 
 ---
 
-## 二、消息信封 (Message Envelope)
+## 二、协议层次
 
-这是系统中**所有**消息的固定 JSON 结构。无论是内部 Python Agent 还是外部 Go/JS 程序, 发送的消息都必须是这个格式。
+AQAP v3 采用三层分离架构：
 
-```json
-{
-  "type":           "TASK_DISPATCH",
-  "message_id":     "a1b2c3d4e5f6g7h8",
-  "source":         "cli-orchestrator",
-  "target":         "",
-  "topic":          "aqap:agent:probe",
-  "trace_id":       "trace_dcf9a2b1",
-  "correlation_id": "",
-  "version":        "1.0",
-  "payload":        { "task_id": "t-001", "target_svc": "svc-a" },
-  "timestamp":      "2026-06-25T10:30:00+00:00"
-}
+```
+设计时（概念清晰）                      运行时（零拷贝）
+─────────────────                      ────────────────
+
+┌──────────────────────┐                ┌──────────────────────────┐
+│ Transport Envelope    │               │ WireMessage (单次 alloc)  │
+│ ──────────────────── │               │                          │
+│ message_id: UUID v7   │  ◄── 路由 ──► │ Header (64B fixed)       │
+│ topic: str            │  ◄── 安全 ──► │ Topic (variable)         │
+│ signature: bytes      │               │ Message (variable)       │
+│ payload_encoding: u8  │               │   ├─ trace_id, span_id   │
+└──────────┬───────────┘               │   ├─ source, target      │
+           │                            │   ├─ type, headers       │
+┌──────────▼───────────┐               │   └─ body                │
+│ Protocol Message      │               │ Signature (optional)     │
+│ ──────────────────── │               └──────────────────────────┘
+│ source: str           │  ◄── 追踪 ──
+│ target: str           │
+│ trace_id: UUID v7     │
+│ span_id: u64          │
+│ correlation_id: UUID  │
+│ type: u16             │
+│ headers: dict         │
+│ body: bytes           │
+└──────────┬───────────┘
+           │
+┌──────────▼───────────┐
+│ Business Schema       │
+│ ──────────────────── │
+│ schema_id: str        │  ◄── 契约 ──
+│ data: dict            │
+└───────────────────────┘
 ```
 
-协议规范见 **[PROTOCOL.md](PROTOCOL.md)**（JSON Schema、状态机、路由规则），以该文件为准。
+| 层 | 数据结构 | 关心什么 | 不关心什么 |
+|----|----------|----------|------------|
+| Transport | `Envelope` | 路由 (topic)、可靠性 (message_id)、安全 (signature) | 消息内容 |
+| Protocol | `Message` | 追踪 (trace/span)、路由 (source/target)、类型 (type) | 业务数据含义 |
+| Business | `SchemaEnvelope` | 契约校验 (schema_id)、数据正确性 | 传输细节 |
 
 ---
 
-## 三、消息类型 (Message Types)
+## 三、协议内核 (Rust — PyO3)
 
-| 类型 | 语义 | 方向 | 典型 payload |
-|---|---|---|---|
-| `HEARTBEAT` | 心跳 | Agent → 广播 | `{"cpu": 0.3, "mem": 512, "status": "healthy"}` |
-| `TASK_DISPATCH` | 下发检测任务 | 调度器 → Probe | `{"task_id": "t-001", "target": "svc-a", "required_fields": [...]}` |
-| `TASK_RESULT` | 检测结果 | Probe → Judge | `{"task_id": "t-001", "passed": true, "score": 0.95}` |
-| `JUDGE_REQUEST` | 请求评判 | Probe → Judge | `{"task_id": "t-001", "task": {...}, "result": {...}}` |
-| `JUDGE_VERDICT` | 评判裁决 | Judge → Reporter | `{"task_id": "t-001", "score": 92, "passed": true, "details": [...]}` |
-| `REPORT_REQUEST` | 请求报告 | Judge → Reporter | `{"task_id": "t-001", "task": {...}, "result": {...}, "verdict": {...}}` |
-| `REPORT_DELIVER` | 报告投递 | Reporter → CLI/broadcast | `{"task_id": "t-001", "title": "...", "score": 0.92, "summary": "..."}` |
-| `ERROR` | 系统错误 | 任意 Agent | `{"code": "TIMEOUT", "message": "probe-1 超时", "trace_id": "..."}` |
-| `REGISTER` | Agent 注册 | Agent → 系统事件 | `{"agent_type": "probe"}` |
-| `SHUTDOWN` | Agent 下线 | Agent → 系统事件 | `{}` |
+AQAP v3 内核用 Rust 编写，编译为 Python 原生扩展 (`.so`)。所有热路径操作（序列化、签名、加密、Schema 校验）在 Rust 层完成。
 
-### 类型扩展规则
+```
+┌──────────────────────────────────────────────────────────────┐
+│                   AQAP Kernel (Rust)                          │
+│  ┌──────────┐ ┌──────────────┐ ┌────────────┐ ┌───────────┐ │
+│  │ wire.rs  │ │ crypto.rs    │ │ schema.rs  │ │router.rs  │ │
+│  │ 64B header│ │ AES-256-GCM  │ │ JSON Schema│ │ Topic→Hdlr│ │
+│  │ msgpack   │ │ HMAC-SHA256  │ │ Registry   │ │ Map       │ │
+│  │ zstd/lz4  │ │ HKDF derive  │ │ 7 builtins │ │           │ │
+│  │ xxHash64  │ │ Ed25519(wire)│ │            │ │           │ │
+│  └──────────┘ └──────────────┘ └────────────┘ └───────────┘ │
+└──────────────────────────────────────────────────────────────┘
+```
 
-1. 类型名使用 `SCREAMING_SNAKE_CASE`, 长度不超过 32 字符
-2. 新增类型必须在本 README 中登记
-3. 自定义类型前缀建议加模块名, 如 `PLUGIN_CUSTOM_CHECK`
-4. 收到不识别的类型, Agent **必须**通过 `ERROR` 消息报告, 不能静默丢弃
+```python
+from aqap.kernel import (
+    WireHeader, WireMessage,          # 线格式
+    SecurityContext, encrypt_payload,  # 安全
+    SchemaRegistry, ValidationResult,  # Schema
+    Router,                            # 路由
+)
+```
+
+### 线格式 (Wire Format)
+
+64 字节固定头 + 变长 topic + 变长消息体 + 可选签名：
+
+| 偏移 | 长度 | 字段 |
+|------|------|------|
+| 0 | 4 | magic `0x41514150` ("AQAP") |
+| 4 | 2 | version_major (3) |
+| 6 | 2 | version_minor (0) |
+| 8 | 2 | version_patch (0) |
+| 10 | 1 | flags (encoding 2b + compression 2b + signature 2b) |
+| 11 | 1 | priority (0=low, 1=normal, 2=high, 3=critical) |
+| 16 | 16 | message_id (UUID v7) |
+| 32 | 8 | timestamp_ms (Unix 毫秒) |
+| 48 | 2 | topic_len |
+| 52 | 4 | total_len |
+| 56 | 8 | checksum (xxHash64) |
+
+支持的编码: **JSON** / **MsgPack** / Protobuf / FlatBuffer  
+支持的压缩: none / **zstd** / **lz4** / zlib  
+支持的签名: none / **HMAC-SHA256** (32B) / Ed25519 (64B)
+
+### 安全层
+
+```
+Master Key (32 bytes)
+  ├── HKDF(info="encrypt") → AES-256-GCM 加密 body
+  ├── HKDF(info="sign")    → HMAC-SHA256 签名 envelope
+  └── HKDF(info="route")   → HMAC-SHA256 签名 topic (防篡改)
+```
+
+支持密钥轮换：最多 3 个密钥同时有效（当前 + 2 个旧密钥仅解密）。
+
+### Schema 系统
+
+7 个内置 Schema (JSON Schema Draft 7):
+- `aqap:schema:task.v3` — 检测任务
+- `aqap:schema:result.v3` — 检测结果
+- `aqap:schema:verdict.v3` — 评判裁决
+- `aqap:schema:report.v3` — 报告
+- `aqap:schema:heartbeat.v3` — 心跳
+- `aqap:schema:error.v3` — 错误
+- `aqap:schema:dlq.v3` — 死信
 
 ---
 
-## 四、Topic 系统
+## 四、Python SDK — 两个入口
 
-Topic 是消息路由的唯一依据。Agent 不关心"发给谁", 只关心"投到哪个 topic"和"订阅哪个 topic"。
+### 函数式 API（5 行跑起来）
 
-### 内置 Topic
+```python
+from aqap import AQAP
 
-| Topic | 用途 | 消费者 |
-|---|---|---|
-| `aqap:broadcast` | 全局广播通道 (心跳 / 系统通知) | 所有 Agent |
-| `aqap:agent:probe` | 检测任务分发 | Probe Agent |
-| `aqap:agent:judge` | 评判裁决 | Judge Agent |
-| `aqap:agent:reporter` | 报告生成 | Reporter Agent |
-| `aqap:inbox:{agent_id}` | Agent 私有收件箱 (定向消息) | 指定 Agent |
-| `aqap:system:events` | 系统事件 (注册/下线) | 监控组件 |
+app = AQAP(transport="redis://localhost:6379")
 
-### Topic 命名规范
+@app.on("aqap:v3:agent:probe")
+async def handle_task(msg):
+    score = await check(msg["data"]["target"]["repo"])
+    return {"passed": True, "score": score}
 
-```
-aqap:{scope}:{name}
-  │      │       └─ 具体名称, 小写字母 + 连字符
-  │      └───────── 作用域 (agent / inbox / broadcast / system)
-  └──────────────── 系统保留前缀
+app.run()  # 一行启动：连接、注册、心跳、消费、reply、追踪、重试
 ```
 
----
+### 声明式 API（全功能）
 
-## 五、全链路追踪 (Trace & Correlation)
+```python
+from aqap import agent, Agent
 
-### trace_id — 任务链标识
-
-```
-初始消息                     trace_id = "trace_a1b2"
-  TASK_DISPATCH ────────► aqap:agent:probe
-                               │
-                          trace_id 保持不变 ──── 透传
-                               │
-  TASK_RESULT    ◄──────── aqap:agent:probe
-    trace_id = "trace_a1b2"
-                               │
-  JUDGE_VERDICT  ◄──────── aqap:agent:judge
-    trace_id = "trace_a1b2"
-```
-
-**规则**: 一条任务链上所有的消息共享同一个 `trace_id`。每个 Agent 在处理消息后继续往下游发消息时,**必须透传原始的 `trace_id`**, 不能重新生成。
-
-### correlation_id — 消息级回覆
-
-```
-Agent A 发送 message_id="msg_001"
-                    │
-                    ▼
-Agent B 处理完回复 message_id="msg_002", correlation_id="msg_001"
-                                              │
-                                              └── Agent A 通过 correlation_id
-                                                  知道这是 msg_001 的回复
+@agent(
+    agent_id="my-probe",
+    transport="redis://localhost:6379",
+    subscribe=["aqap:v3:agent:probe"],
+    schema_in=TaskSchema,
+    schema_out=ResultSchema,
+    concurrency=4,
+)
+class MyProbe(Agent):
+    async def handle(self, task: TaskSchema) -> ResultSchema:
+        findings = await self.model.analyze(task.target)
+        return ResultSchema(
+            task_id=task.task_id,
+            passed=all(f.severity != "critical" for f in findings),
+            score=avg(f.score for f in findings),
+        )
 ```
 
-**规则**: 当消息是对另一条消息的回复时, `correlation_id` 填原始消息的 `message_id`。非回复消息的 `correlation_id` 为空字符串。
-
----
-
-## 六、数据流
-
-```
-Scheduler/CLI                Probe Agent              Judge Agent            Reporter Agent
-     │                           │                        │                      │
-     │  TASK_DISPATCH             │                        │                      │
-     │──────────────────────────► │                        │                      │
-     │                           │                        │                      │
-     │                     ┌─────┴─────┐                  │                      │
-     │                     │ 执行插件   │                  │                      │
-     │                     └─────┬─────┘                  │                      │
-     │                           │                        │                      │
-     │                     TASK_RESULT                    │                      │
-     │                     JUDGE_REQUEST                  │                      │
-     │                           │───────────────────────►│                      │
-     │                           │                        │                      │
-     │                           │                  ┌─────┴─────┐                │
-     │                           │                  │ 执行评分   │                │
-     │                           │                  └─────┬─────┘                │
-     │                           │                        │                      │
-     │                           │                  JUDGE_VERDICT               │
-     │                           │                  REPORT_REQUEST              │
-     │                           │                        │────────────────────►│
-     │                           │                        │                      │
-     │                           │                  REPORT_DELIVER              │
-     │◄────────────────────────────────────────────────────────────────────────│
-```
-
----
-
-## 七、外部 Agent 接入
-
-外部 Agent (Go / JS / Java / Rust / 任意语言) 接入的核心原则:
-
-> **不需要 AQA SDK, 不需要 AQA 内核, 不需要 Python 环境。**
-> 只需要能连接队列, 会拼 JSON。
-
-SDK 实现见 `sdk/` 目录:
-- `aqap_sdk/message.py` — Python 端消息构造/解析
-- `aqap_sdk/consumer.py` — 自动 ACK 的消费循环
-- `aqap_sdk/bridge/` — HTTPBridge 实现
-- `examples/go_agent.go` — Go 语言外部 Agent 完整示例
-- `examples/js_agent.mjs` — JS/Node.js 外部 Agent 完整示例
-
----
-
-## 八、快速开始
+### REST Gateway（curl 接入）
 
 ```bash
-# 1. 安装
-cd AQA
-python3 -m venv venv
-./venv/bin/pip install -r requirements.txt
-
-# 2. 运行测试 (37 项, 无需外部依赖)
-PYTHONPATH=. ./venv/bin/python -m pytest tests/ sdk/tests/ -v
-
-# 3. 运行 InMemory Demo (无需 Redis)
-PYTHONPATH=. ./venv/bin/python examples/demo.py
-# 日志输出格式: [2026-06-27 10:30:00] [aqap.agent.probe] [INFO] ...
-
-# 4. 调整日志级别 (修改 config.yaml)
-# logging:
-#   level: "DEBUG"    # 开发调试; "INFO"=生产
-
-# 5. 使用 Engine 启动全部 Agent (配置驱动)
-PYTHONPATH=. ./venv/bin/python -m aqa.run
-
-# 6. 使用 Docker Compose (Redis + AQA)
-docker compose up -d
-docker compose logs -f
+curl -X POST http://localhost:8080/v3/request/aqap:v3:agent:probe \
+  -H "Content-Type: application/json" \
+  -d '{"task_id":"task-abc","type":"code_review","target":{"repo":"my/repo","branch":"main"}}'
 ```
 
 ---
 
-## 九、项目结构
+## 五、多语言 SDK
 
-```
-AQA/
-├── PROTOCOL.md              # ★ 通信协议规范 (JSON Schema / 状态机 / 路由规则)
-├── CHANGELOG.md             # 历次修改记录
-├── README.md                # 本文件
-├── docs/                    # 设计文档目录
-│   ├── ARCHITECTURE.md      # 架构总览
-│   ├── AGENT_SYSTEM.md      # Agent 子系统详解
-│   ├── TRANSPORT.md         # Transport 层详解
-│   ├── PLUGIN_SYSTEM.md     # 插件系统详解
-│   ├── TESTING.md           # 测试策略
-│   └── CONFIG_REFERENCE.md  # 配置参考
-│
-├── aqap/                     # AQA 内核
-│   ├── core/
-│   │   ├── message.py       # 消息协议实现 (遵循 PROTOCOL.md)
-│   │   ├── engine.py        # 配置驱动运行时引擎
-│   │   ├── dlq.py           # 死信队列
-│   │   ├── log_config.py    # 日志初始化 (从 config.yaml 读取级别)
-│   │   ├── config.py        # 配置加载
-│   │   └── security.py      # Payload AES 加密
-│   ├── transport/
-│   │   ├── base.py          # Transport ABC
-│   │   ├── inmemory.py      # InMemory 实现 (测试/演示)
-│   │   ├── redis_streams.py # Redis Streams 实现 (生产)
-│   │   └── kafka_transport.py   # Kafka 实现 (高吞吐)
-│   ├── plugin/
-│   │   ├── base.py          # Plugin ABC
-│   │   └── registry.py      # 插件注册中心
-│   ├── agent/
-│   │   ├── base.py          # Agent 基类 (心跳/重试/DLQ/幂等去重/优雅关闭)
-│   │   ├── supervisor.py    # Agent 生命周期总管
-│   │   ├── probe.py         # 检测 Agent
-│   │   ├── judge.py         # 评判 Agent
-│   │   └── reporter.py      # 报告 Agent
-│   └── plugins/
-│       ├── validator.py     # 字段校验插件
-│       ├── scorer.py        # 加权评分插件
-│       └── trace_collector.py # 链路追踪插件
-│
-├── sdk/                     # 外部 Agent SDK
-│   ├── aqap_sdk/             #   Python SDK (独立包)
-│   ├── README.md            #   协议文档 + 多语言示例
-│   └── examples/
-│       ├── go_agent.go      #   Go 外部 Agent 示例
-│       └── js_agent.mjs     #   JS 外部 Agent 示例
-│
-├── tests/                   # 核心测试
-│   └── test_aqap.py          # 30 项测试
-├── examples/
-│   └── demo.py              # InMemory Demo
-├── Dockerfile
-├── docker-compose.yml
-└── config.yaml              # 主配置 (完整版)
+| 语言 | 安装 | 状态 |
+|------|------|:---:|
+| Python | `pip install aqap-sdk` + `aqap-kernel` | Phase 1 完成 |
+| TypeScript | `npm install @aqap/sdk` | Phase 4 计划 |
+| Go | `go get github.com/aqap/sdk-go/v3` | Phase 4 计划 |
+
+---
+
+## 六、快速开始
+
+```bash
+# 1. 安装内核 (需要 Rust 工具链)
+cd aqap-kernel && cargo build --release
+cp target/release/libaqap_kernel.dylib ../aqap/kernel/_aqap_kernel.so
+
+# 2. 运行 Rust 测试 (58 项)
+cargo test
+
+# 3. 运行 Python 测试 (35 项内核测试)
+cd .. && python3 -m pytest tests/test_wire.py tests/test_crypto.py \
+  tests/test_schema.py tests/test_kernel_integration.py -v
+
+# 4. 运行 v1 兼容测试 (30 项)
+python3 -m pytest tests/test_aqa.py -v
 ```
 
 ---
 
-## 十、文档索引
+## 七、项目结构
+
+```
+AQAP/
+├── PROTOCOL.md                # v1 协议规范 (向后兼容)
+├── PROTOCOL_v2.md             # v2 协议草案
+├── README.md                  # 本文件
+│
+├── docs/
+│   ├── superpowers/specs/     # 设计规格
+│   │   └── 2026-07-01-aqap-v3-protocol-design.md
+│   ├── superpowers/plans/     # 实现计划
+│   │   └── 2026-07-01-aqap-v3-phase1-protocol-kernel.md
+│   ├── ARCHITECTURE.md        # 架构总览
+│   ├── AGENT_SYSTEM.md        # Agent 子系统详解
+│   ├── TRANSPORT.md           # Transport 层详解
+│   ├── PLUGIN_SYSTEM.md       # 插件系统详解
+│   ├── TESTING.md             # 测试策略
+│   └── CONFIG_REFERENCE.md    # 配置参考
+│
+├── aqap-kernel/               # ★ Rust 协议内核 (Phase 1)
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs             # PyO3 入口
+│       ├── types.rs           # MessageType, ErrorCode, Flags
+│       ├── wire.rs            # 线格式 encode/decode
+│       ├── crypto.rs          # AES-GCM, HMAC, HKDF
+│       ├── schema.rs          # JSON Schema 校验引擎
+│       ├── router.rs          # Topic→Handler 路由
+│       ├── error.rs           # 错误码体系
+│       └── schemas/           # 7 个内置 JSON Schema
+│
+├── aqap/                      # Python SDK
+│   ├── kernel/                #   Rust 内核 Python 绑定
+│   │   ├── __init__.py
+│   │   └── _aqap_kernel.so
+│   ├── core/                  #   v1 内核 (兼容)
+│   │   ├── message.py         #     消息协议
+│   │   ├── engine.py          #     运行时引擎
+│   │   ├── dlq.py             #     死信队列
+│   │   ├── config.py          #     配置加载
+│   │   └── security.py        #     Payload 加密
+│   ├── transport/             #   传输层
+│   │   ├── base.py            #     Transport ABC
+│   │   ├── inmemory.py        #     InMemory 实现
+│   │   ├── redis_streams.py   #     Redis Streams 实现
+│   │   ├── kafka_transport.py #     Kafka 实现
+│   │   └── rabbitmq_transport.py # RabbitMQ 实现
+│   ├── agent/                 #   Agent 层
+│   │   ├── base.py            #     Agent 基类
+│   │   ├── supervisor.py      #     Supervisor
+│   │   ├── probe.py           #     Probe Agent
+│   │   ├── judge.py           #     Judge Agent
+│   │   └── reporter.py        #     Reporter Agent
+│   ├── v2/                    #   v2 协议实现
+│   └── cli/                   #   CLI 工具 (Phase 5 计划)
+│
+├── sdk/                       # 外部 Agent SDK
+│   ├── aqap_sdk/               #   Python SDK
+│   ├── README.md              #   多语言接入文档
+│   └── examples/              #   Go / JS 外部 Agent 示例
+│
+├── tests/
+│   ├── test_wire.py           # 线格式测试 (7)
+│   ├── test_crypto.py         # 安全层测试 (15)
+│   ├── test_schema.py         # Schema 测试 (13)
+│   ├── test_kernel_integration.py # 集成测试 (2)
+│   ├── test_aqa.py            # v1 兼容测试 (30)
+│   └── test_extended.py       # 扩展测试
+│
+├── config.yaml
+├── pyproject.toml
+└── requirements.txt
+```
+
+---
+
+## 八、消息类型
+
+| 类型 | 语义 | u16 编码 |
+|------|------|:------:|
+| `task:dispatch` | 下发检测任务 | 0x0000 |
+| `task:result` | 检测结果 | 0x0001 |
+| `task:cancel` | 任务取消 | 0x0002 |
+| `judge:request` | 请求评判 | 0x0010 |
+| `judge:verdict` | 评判裁决 | 0x0011 |
+| `report:request` | 请求报告 | 0x0020 |
+| `report:deliver` | 报告投递 | 0x0021 |
+| `system:heartbeat` | 心跳 | 0x0100 |
+| `system:register` | Agent 注册 | 0x0101 |
+| `system:shutdown` | Agent 下线 | 0x0102 |
+| `system:error` | 错误通知 | 0x0103 |
+
+完整错误码体系见设计规格：`docs/superpowers/specs/2026-07-01-aqap-v3-protocol-design.md`
+
+---
+
+## 九、Topic 系统
+
+| Topic | 用途 | v3 路径 |
+|-------|------|---------|
+| Probe 任务分发 | 检测任务路由 | `aqap:v3:agent:probe` |
+| Judge 评判 | 评判请求路由 | `aqap:v3:agent:judge` |
+| Reporter 报告 | 报告生成路由 | `aqap:v3:agent:reporter` |
+| 系统事件 | 注册/下线/轮换 | `aqap:v3:system:events` |
+| 心跳 | Agent 心跳 | `aqap:v3:system:heartbeat` |
+| 死信队列 | 失败消息 | `aqap:v3:error:dlq` |
+| Agent 收件箱 | 定向消息 | `aqap:v3:inbox:{agent_id}` |
+| 广播 | 全局广播 | `aqap:v3:broadcast` |
+
+---
+
+## 十、全链路追踪
+
+```
+TASK_DISPATCH  →  trace_id = "0192abcd..."  ← 入口生成, span_id = aaaa
+TASK_RESULT    →  trace_id = "0192abcd..."  ← 透传, span_id = bbbb
+JUDGE_VERDICT  →  trace_id = "0192abcd..."  ← 透传, span_id = cccc
+REPORT_DELIVER →  trace_id = "0192abcd..."  ← 透传, span_id = dddd
+
+correlation_id: 回复时填原始消息的 message_id
+```
+
+---
+
+## 十一、文档索引
 
 | 文档 | 内容 | 受众 |
-|---|---|---|
-| **[PROTOCOL.md](PROTOCOL.md)** | 消息协议 JSON Schema、状态机、路由规则（唯一权威线格式规范） | 所有 Agent 开发者 |
-| **[CHANGELOG.md](CHANGELOG.md)** | 历次代码修改记录，按时间倒序 | 维护者 |
-| **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | 系统架构总览：模块依赖、数据流、配置体系 | 新开发者入门 |
-| **[docs/AGENT_SYSTEM.md](docs/AGENT_SYSTEM.md)** | Agent 基类、Probe/Judge/Reporter、Supervisor 详解 | Agent 开发者 |
-| **[docs/TRANSPORT.md](docs/TRANSPORT.md)** | Transport 抽象、InMemory/Redis/Kafka 实现细节 | Transport 实现者 |
-| **[docs/PLUGIN_SYSTEM.md](docs/PLUGIN_SYSTEM.md)** | Plugin 基类、Registry、内置插件、自定义指南 | 插件开发者 |
-| **[docs/TESTING.md](docs/TESTING.md)** | 测试策略、运行方式、添加测试指南 | 测试者 |
-| **[docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md)** | config.yaml 配置参考 | 运维/部署 |
+|------|------|------|
+| **[设计规格](docs/superpowers/specs/2026-07-01-aqap-v3-protocol-design.md)** | v3 完整协议设计 (线格式/SDK/安全/Gateway) | 所有开发者 |
+| **[Phase 1 计划](docs/superpowers/plans/2026-07-01-aqap-v3-phase1-protocol-kernel.md)** | 内核实现计划 (6 tasks) | 实现者 |
+| **[PROTOCOL.md](PROTOCOL.md)** | v1 协议规范 (向后兼容) | 外部 Agent 开发者 |
+| **[PROTOCOL_v2.md](PROTOCOL_v2.md)** | v2 协议草案 | 参考 |
+| **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | 系统架构总览 | 新开发者 |
+| **[docs/AGENT_SYSTEM.md](docs/AGENT_SYSTEM.md)** | Agent 详解 | Agent 开发者 |
+| **[docs/TRANSPORT.md](docs/TRANSPORT.md)** | Transport 实现细节 | Transport 实现者 |
+| **[sdk/README.md](sdk/README.md)** | 外部 Agent 多语言接入 | 外部开发者 |
 
 ---
 
-## 十一、版本与兼容性
+## 十二、版本
 
-```
-消息版本: version: "1.0"                       ← 协议版本
-系统版本: app.version: "1.0.0" in config.yaml   ← 部署版本
-```
+| 版本 | 协议 | 内核 | 状态 |
+|------|------|------|:---:|
+| v1 | `PROTOCOL.md` | `aqap/core/` | 稳定, 兼容 |
+| v2 | `PROTOCOL_v2.md` | `aqap/v2/` | 草案 |
+| **v3** | 设计规格 | `aqap-kernel/` | **Phase 1 完成** |
 
-- `version` 字段只在大版本不兼容时升级 (比如字段重命名、类型定义变更)
-- 新增字段或新增消息类型不算不兼容变更, `version` 可保持不变
-- 系统支持多个版本的 `version` 同时存在, Agent 按 `version` 字段路由到对应的处理逻辑
-
-### 降级策略
-
-Agent 处理消息时:
-1. 检查 `version` — 如果不支持, 发布 `ERROR` 消息
-2. 检查 `type` — 如果不识别, 发布 `ERROR` 消息
-3. 检查 `trace_id` — 如果缺失, 主动生成一个并记日志警告
+- `message_id` 和 `trace_id` 使用 **UUID v7** (128-bit, 时间有序)
+- 线格式版本号 `3.0.0` (semver)
+- major 不兼容需桥接 Agent, minor/patch 向后兼容
 
 ---
 
-## 十二、协议维护
-
-协议以 **[PROTOCOL.md](PROTOCOL.md)** 为准，`README.md` 仅作概述。
+## 十三、协议维护
 
 修改协议时需要同步：
-1. `PROTOCOL.md` — 协议规范
-2. `aqap/core/message.py` — 消息实现
-3. `sdk/aqap_sdk/message.py` — SDK 消息实现
-4. `tests/test_aqap.py` 和 `sdk/tests/test_sdk.py` — 更新测试
+
+1. `docs/superpowers/specs/` — 设计规格
+2. `aqap-kernel/src/` — Rust 内核实现
+3. `aqap/` — Python SDK
+4. `tests/` — 测试

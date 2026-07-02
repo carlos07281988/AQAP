@@ -1,0 +1,14 @@
+{
+  "$id": "aqap:schema:verdict.v3",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Judge Verdict",
+  "type": "object",
+  "properties": {
+    "task_id": { "type": "string" },
+    "verdict": { "type": "string", "enum": ["approve", "reject", "needs_revision"] },
+    "score": { "type": "number", "minimum": 0, "maximum": 100 },
+    "comments": { "type": "string" },
+    "issues": { "type": "array", "items": { "type": "object" } }
+  },
+  "required": ["task_id", "verdict", "score"]
+}

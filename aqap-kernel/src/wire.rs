@@ -294,8 +294,14 @@ pub struct WireMessage {
 
 /// Encode a full wire message to bytes
 pub fn encode_message(msg: &WireMessage) -> Vec<u8> {
+    encode_message_with_flags(msg, msg.flags)
+}
+
+/// Encode a full wire message to bytes, using the provided flags instead of those on the message.
+/// This avoids cloning the entire WireMessage when only the encoding/compression/signature flags differ.
+pub fn encode_message_with_flags(msg: &WireMessage, flags: Flags) -> Vec<u8> {
     // 1. Encode message body
-    let body_bytes = encode_body(&msg.body, msg.flags.encoding());
+    let body_bytes = encode_body(&msg.body, flags.encoding());
 
     // 2. Build message block (trace_id through body)
     let mut msg_block = Vec::with_capacity(128 + body_bytes.len());
@@ -333,12 +339,12 @@ pub fn encode_message(msg: &WireMessage) -> Vec<u8> {
     msg_block.extend_from_slice(&body_bytes);
 
     // 3. Compress if needed
-    let compressed = compress_if_needed(&msg_block, msg.flags.compression());
+    let compressed = compress_if_needed(&msg_block, flags.compression());
 
     // 4. Build header
     let topic_bytes = msg.topic.as_bytes();
     let total_len = HEADER_SIZE + topic_bytes.len() + compressed.len();
-    let sig_len = msg.flags.signature_mode().sig_len();
+    let sig_len = flags.signature_mode().sig_len();
     let total_with_sig = total_len + sig_len;
 
     let header = WireHeader {
@@ -349,7 +355,7 @@ pub fn encode_message(msg: &WireMessage) -> Vec<u8> {
         timestamp_ms: msg.timestamp_ms,
         ttl_ms: msg.ttl_ms,
         max_body_size: msg.max_body_size,
-        flags: msg.flags,
+        flags,
         priority: msg.priority,
         key_id: msg.key_id,
     };
@@ -814,14 +820,16 @@ impl WireMessage {
 
 #[pyfunction]
 pub fn wire_message_encode(py: Python<'_>, msg: &WireMessage, encoding: &str) -> PyResult<Py<PyBytes>> {
-    // Allow encoding override
-    let mut msg = msg.clone();
-    match encoding {
-        "json" => msg.flags = Flags::new(Encoding::Json, msg.flags.compression(), msg.flags.signature_mode()),
-        "msgpack" => msg.flags = Flags::new(Encoding::MsgPack, msg.flags.compression(), msg.flags.signature_mode()),
-        _ => {}
-    }
-    let bytes = encode_message(&msg);
+    let adjusted_flags = match encoding {
+        "json" => Flags::new(Encoding::Json, msg.flags.compression(), msg.flags.signature_mode()),
+        "msgpack" => Flags::new(Encoding::MsgPack, msg.flags.compression(), msg.flags.signature_mode()),
+        other => {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                format!("unsupported encoding: '{}', expected 'json' or 'msgpack'", other)
+            ));
+        }
+    };
+    let bytes = encode_message_with_flags(msg, adjusted_flags);
     Ok(PyBytes::new(py, &bytes).into())
 }
 

@@ -69,8 +69,26 @@ impl MessageType {
 
     pub fn to_u16(self) -> u16 {
         match self {
-            Self::Custom(v) => v,
-            _ => unsafe { *(&self as *const Self as *const u16) },
+            Self::TaskDispatch   => 0x0000,
+            Self::TaskResult     => 0x0001,
+            Self::TaskCancel     => 0x0002,
+            Self::JudgeRequest   => 0x0010,
+            Self::JudgeVerdict   => 0x0011,
+            Self::ReportRequest  => 0x0020,
+            Self::ReportDeliver  => 0x0021,
+            Self::Heartbeat      => 0x0100,
+            Self::Register       => 0x0101,
+            Self::Shutdown       => 0x0102,
+            Self::Error          => 0x0103,
+            Self::KeyRotate      => 0x0104,
+            Self::GatewayRoute   => 0x0105,
+            Self::DlqMessage     => 0x0106,
+            Self::Probe          => 0x0200,
+            Self::Judge          => 0x0201,
+            Self::Report         => 0x0202,
+            Self::Result         => 0x0203,
+            Self::PluginEvent    => 0x0300,
+            Self::Custom(v)      => v,
         }
     }
 

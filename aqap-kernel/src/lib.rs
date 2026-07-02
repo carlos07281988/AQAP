@@ -25,5 +25,13 @@ fn aqap_kernel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(wire::wire_message_encode, m)?)?;
     m.add_function(wrap_pyfunction!(wire::wire_message_decode, m)?)?;
 
+    // Crypto
+    m.add_class::<crypto::SecurityContext>()?;
+    m.add_function(wrap_pyfunction!(crypto::hkdf_derive, m)?)?;
+    m.add_function(wrap_pyfunction!(crypto::encrypt_payload, m)?)?;
+    m.add_function(wrap_pyfunction!(crypto::decrypt_payload, m)?)?;
+    m.add_function(wrap_pyfunction!(crypto::sign_envelope, m)?)?;
+    m.add_function(wrap_pyfunction!(crypto::verify_envelope, m)?)?;
+
     Ok(())
 }

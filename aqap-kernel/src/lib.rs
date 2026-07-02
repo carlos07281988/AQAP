@@ -33,5 +33,14 @@ fn aqap_kernel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(crypto::sign_envelope, m)?)?;
     m.add_function(wrap_pyfunction!(crypto::verify_envelope, m)?)?;
 
+    // Schema
+    m.add_class::<schema::SchemaRegistry>()?;
+    m.add_class::<schema::ValidationResult>()?;
+    m.add_class::<schema::SchemaEnvelope>()?;
+    m.add_class::<schema::SchemaMeta>()?;
+
+    // Router
+    m.add_class::<router::Router>()?;
+
     Ok(())
 }

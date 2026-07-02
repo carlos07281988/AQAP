@@ -1,0 +1,14 @@
+{
+  "$id": "aqap:schema:report.v3",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Quality Report",
+  "type": "object",
+  "properties": {
+    "report_id": { "type": "string" },
+    "task_ids": { "type": "array", "items": { "type": "string" } },
+    "summary": { "type": "string" },
+    "metrics": { "type": "object" },
+    "generated_at": { "type": "string", "format": "date-time" }
+  },
+  "required": ["report_id", "task_ids"]
+}

@@ -1,0 +1,14 @@
+{
+  "$id": "aqap:schema:result.v3",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Task Result",
+  "type": "object",
+  "properties": {
+    "task_id": { "type": "string" },
+    "status": { "type": "string", "enum": ["pass", "fail", "error", "skipped"] },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "output": { "type": "string" },
+    "artifacts": { "type": "array", "items": { "type": "object" } }
+  },
+  "required": ["task_id", "status"]
+}

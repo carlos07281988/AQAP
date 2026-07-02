@@ -1,0 +1,15 @@
+{
+  "$id": "aqap:schema:dlq.v3",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Dead Letter Queue Message",
+  "type": "object",
+  "properties": {
+    "original_message_id": { "type": "string" },
+    "error": { "type": "string" },
+    "retry_count": { "type": "integer", "minimum": 0 },
+    "last_error": { "type": "string" },
+    "enqueued_at": { "type": "string", "format": "date-time" },
+    "original_topic": { "type": "string" }
+  },
+  "required": ["original_message_id", "error", "retry_count"]
+}

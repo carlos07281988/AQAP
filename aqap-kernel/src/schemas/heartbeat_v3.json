@@ -1,0 +1,14 @@
+{
+  "$id": "aqap:schema:heartbeat.v3",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Agent Heartbeat",
+  "type": "object",
+  "properties": {
+    "agent_id": { "type": "string" },
+    "status": { "type": "string", "enum": ["alive", "busy", "draining", "offline"] },
+    "load": { "type": "number", "minimum": 0, "maximum": 1 },
+    "uptime_seconds": { "type": "integer", "minimum": 0 },
+    "capabilities": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["agent_id", "status"]
+}

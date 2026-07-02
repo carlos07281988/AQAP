@@ -12,6 +12,11 @@ from aqap.kernel.aqap_kernel import (
     decrypt_payload,
     sign_envelope,
     verify_envelope,
+    SchemaRegistry,
+    ValidationResult,
+    SchemaEnvelope,
+    SchemaMeta,
+    Router,
     MAGIC,
     HEADER_SIZE,
 )
@@ -28,6 +33,11 @@ __all__ = [
     "decrypt_payload",
     "sign_envelope",
     "verify_envelope",
+    "SchemaRegistry",
+    "ValidationResult",
+    "SchemaEnvelope",
+    "SchemaMeta",
+    "Router",
     "MAGIC",
     "HEADER_SIZE",
 ]

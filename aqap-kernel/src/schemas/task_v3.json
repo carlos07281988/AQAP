@@ -1,0 +1,26 @@
+{
+  "$id": "aqap:schema:task.v3",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Quality Task",
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "pattern": "^task-[a-z0-9]{8,}$"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["code_review", "unit_test", "integration_test", "lint"]
+    },
+    "target": {
+      "type": "object",
+      "properties": {
+        "repo": { "type": "string", "pattern": "^[\\w.-]+/[\\w.-]+$" },
+        "branch": { "type": "string" },
+        "commit": { "type": "string", "pattern": "^[a-f0-9]{40}$" }
+      },
+      "required": ["repo", "branch"]
+    }
+  },
+  "required": ["task_id", "type", "target"]
+}

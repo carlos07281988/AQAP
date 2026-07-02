@@ -1,0 +1,8 @@
+# aqap-kernel build config
+# Ensures linking against the correct Python framework on macOS
+[build]
+rustflags = ["-L", "/usr/local/opt/python@3.11/Frameworks/Python.framework/Versions/3.11/lib", "-lpython3.11"]
+
+[env]
+PYO3_PYTHON = "/usr/local/opt/python@3.11/bin/python3.11"
+MACOSX_DEPLOYMENT_TARGET = "13.0"

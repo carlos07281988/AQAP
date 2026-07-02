@@ -20,5 +20,10 @@ fn aqap_kernel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(wire::wire_header_encode, m)?)?;
     m.add_function(wrap_pyfunction!(wire::wire_header_decode, m)?)?;
 
+    // Wire message
+    m.add_class::<wire::WireMessage>()?;
+    m.add_function(wrap_pyfunction!(wire::wire_message_encode, m)?)?;
+    m.add_function(wrap_pyfunction!(wire::wire_message_decode, m)?)?;
+
     Ok(())
 }

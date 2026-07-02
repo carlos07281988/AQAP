@@ -1,6 +1,13 @@
 # tests/test_wire.py
 import pytest
-from aqap.kernel import wire_header_encode, wire_header_decode, WireHeader
+from aqap.kernel import (
+    WireHeader,
+    wire_header_encode,
+    wire_header_decode,
+    WireMessage,
+    wire_message_encode,
+    wire_message_decode,
+)
 
 
 class TestWireHeader:
@@ -71,3 +78,86 @@ class TestWireHeader:
         assert int.from_bytes(encoded[6:8], "big") == 0
         # offset 8: version_patch (u16 BE)
         assert int.from_bytes(encoded[8:10], "big") == 0
+
+
+class TestWireMessage:
+    def test_message_round_trip(self):
+        """Full message encode -> decode should be identity."""
+        import uuid
+        msg = WireMessage(
+            message_id=uuid.uuid4(),
+            topic="aqap:v3:agent:probe",
+            trace_id=uuid.uuid4(),
+            span_id=42,
+            source="scheduler-1",
+            target="",
+            correlation_id=uuid.UUID(int=0),
+            msg_type="task:dispatch",
+            body={"task_id": "task-abc12345", "type": "code_review"},
+            headers={"x-priority": "high"},
+            encoding="json",
+            compression="none",
+            signature_mode="none",
+            priority="normal",
+            ttl_ms=30000,
+        )
+        encoded = wire_message_encode(msg, encoding="json")
+        assert len(encoded) > 64  # at least header
+        decoded = wire_message_decode(encoded)
+        assert decoded.topic == "aqap:v3:agent:probe"
+        assert decoded.source == "scheduler-1"
+        assert decoded.target == ""
+        assert decoded.msg_type == "task:dispatch"
+        assert decoded.body == {"task_id": "task-abc12345", "type": "code_review"}
+        assert decoded.headers == {"x-priority": "high"}
+
+    def test_message_with_signature(self):
+        """HMAC-signed message must survive round-trip."""
+        import uuid
+        msg = WireMessage(
+            message_id=uuid.uuid4(),
+            topic="aqap:v3:system:heartbeat",
+            trace_id=uuid.uuid4(),
+            span_id=1,
+            source="probe-1",
+            target="",
+            correlation_id=uuid.UUID(int=0),
+            msg_type="system:heartbeat",
+            body={"alive": True},
+            headers={},
+            encoding="json",
+            compression="none",
+            signature_mode="hmac-sha256",
+            priority="normal",
+            ttl_ms=10000,
+            signature=b"\x00" * 32,  # placeholder
+        )
+        encoded = wire_message_encode(msg, encoding="json")
+        decoded = wire_message_decode(encoded)
+        assert decoded.signature_mode == "hmac-sha256"
+        assert decoded.body == {"alive": True}
+
+    def test_compression_zstd(self):
+        """Zstd-compressed message should decompress transparently."""
+        import uuid
+        msg = WireMessage(
+            message_id=uuid.uuid4(),
+            topic="aqap:v3:agent:probe",
+            trace_id=uuid.uuid4(),
+            span_id=0,
+            source="test", target="",
+            correlation_id=uuid.UUID(int=0),
+            msg_type="task:dispatch",
+            body={"data": "x" * 1000},
+            headers={},
+            encoding="json",
+            compression="zstd",
+            signature_mode="none",
+            priority="normal",
+            ttl_ms=0,
+        )
+        encoded = wire_message_encode(msg, encoding="json")
+        decoded = wire_message_decode(encoded)
+        assert decoded.body == {"data": "x" * 1000}
+        # Compressed should be smaller than uncompressed
+        assert len(encoded) < 64 + 1000 + 20
